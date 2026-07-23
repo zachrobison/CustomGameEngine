@@ -129,7 +129,9 @@
       "Bash(git check-ignore *)",
       "Bash(git credential *)",
       "Bash(git --no-pager diff .claude/settings.local.json)",
-      "Bash(git commit -q -m 'Update Claude Code local permission allowlist *)"
+      "Bash(git commit -q -m 'Update Claude Code local permission allowlist *)",
+      "Bash(chmod +x play.command)",
+      "Bash(git commit -q -m 'Add double-clickable play.command launcher \\(build + run\\) *)"
     ]
   }
 }
