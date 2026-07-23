@@ -1,0 +1,11 @@
+{
+  "name": "Raceway (stunt)",
+  "description": "Battle/stunt racing sandbox. Ramps, boost pads, and 4 AI cars on the circuit. E to drive, V toggles cockpit/chase.",
+  "bootLevel": "raceway",
+  "features": {
+    "vehicle": true, "rocket": false, "grapple": false,
+    "dash": false, "jetpack": false, "dimensionShift": false,
+    "thirdPerson": true, "isoCamera": false
+  },
+  "weapons": ["melee"]
+}

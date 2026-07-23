@@ -1,0 +1,10 @@
+{
+  "name": "Interdimensional Shooter",
+  "description": "Arena prototype: shift between paired dimensions, clear the hostiles.",
+  "bootLevel": "arena",
+  "features": {
+    "vehicle": false, "rocket": true, "grapple": true,
+    "dash": true, "jetpack": true, "dimensionShift": true, "thirdPerson": true
+  },
+  "weapons": ["gun", "melee"]
+}

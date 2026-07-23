@@ -1,0 +1,20 @@
+{
+  "name": "Iron Command",
+  "description": "First-person factory builder (C&C x Satisfactory). Press B for the build tool, place Miners on ore, then Smelters/Constructors/Assemblers. WASD walk, mouse aim.",
+  "bootLevel": "ironcmd",
+  "features": {
+    "rts": false,
+    "factory": true,
+    "vehicle": false,
+    "rocket": false,
+    "grapple": false,
+    "dash": false,
+    "jetpack": false,
+    "dimensionShift": false,
+    "thirdPerson": false,
+    "isoCamera": false
+  },
+  "weapons": [
+    "gun"
+  ]
+}

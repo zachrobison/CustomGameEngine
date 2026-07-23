@@ -1,0 +1,64 @@
+cmake_minimum_required(VERSION 3.20)
+project(VoxelEngine CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+
+# ── Dear ImGui ────────────────────────────────────────────────────────────────
+FetchContent_Declare(imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG        v1.90.4
+)
+FetchContent_MakeAvailable(imgui)
+
+add_library(imgui_lib STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui_lib PUBLIC
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends
+  /opt/homebrew/opt/glfw/include
+)
+
+# ── Homebrew packages ─────────────────────────────────────────────────────────
+find_package(glfw3 REQUIRED)
+find_package(glm   REQUIRED)
+
+# ── Engine executable ─────────────────────────────────────────────────────────
+file(GLOB_RECURSE SOURCES src/*.cpp src/*.mm)
+
+add_executable(VoxelEngine ${SOURCES})
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/src/platform/FileDialog.mm
+    PROPERTIES COMPILE_FLAGS "-x objective-c++"
+)
+
+target_include_directories(VoxelEngine PRIVATE src)
+
+target_link_libraries(VoxelEngine
+  imgui_lib
+  glfw
+  glm::glm
+  "-framework OpenGL"
+  "-framework Cocoa"
+  "-framework IOKit"
+  "-framework CoreVideo"
+)
+
+# Copy shaders and assets next to the executable on each build
+add_custom_command(TARGET VoxelEngine POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_SOURCE_DIR}/shaders
+    $<TARGET_FILE_DIR:VoxelEngine>/shaders
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_SOURCE_DIR}/assets
+    $<TARGET_FILE_DIR:VoxelEngine>/assets
+  COMMENT "Copying shaders and assets"
+)

@@ -1,0 +1,39 @@
+{
+ "idCtr": 500,
+ "npcCtr": 1,
+ "items": [
+  {
+   "id": "lvl",
+   "name": "Pig Mafia Dungeon",
+   "type": "Level",
+   "tags": [
+    "robotsouls"
+   ],
+   "levelSettings": {
+    "voxelWorld": false,
+    "flatTerrain": true,
+    "customMeshPath": "",
+    "proceduralTerrain": true,
+    "gravity": 9.8,
+    "wind_x": 0,
+    "wind_z": 0,
+    "render_dist": 8,
+    "fog_density": 0.006,
+    "sun_angle": 55.0
+   }
+  },
+  {
+   "id": "plr",
+   "name": "Player",
+   "type": "Player"
+  },
+  {
+   "id": "wpn_melee",
+   "name": "Knife",
+   "type": "Weapon",
+   "weaponIdx": 0
+  }
+ ],
+ "actions": [],
+ "globalVars": []
+}

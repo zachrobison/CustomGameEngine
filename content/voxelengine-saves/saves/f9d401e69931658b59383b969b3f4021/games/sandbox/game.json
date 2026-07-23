@@ -1,0 +1,10 @@
+{
+  "name": "Sandbox",
+  "description": "Everything on: playground map, car, all weapons and abilities.",
+  "bootLevel": "default",
+  "features": {
+    "vehicle": true, "rocket": true, "grapple": true,
+    "dash": true, "jetpack": true, "dimensionShift": true, "thirdPerson": true
+  },
+  "weapons": ["sprayer", "eraser", "gun", "melee"]
+}

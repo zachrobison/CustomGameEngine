@@ -1,0 +1,56 @@
+{
+ "idCtr": 500,
+ "npcCtr": 1,
+ "items": [
+  {
+   "id": "lvl",
+   "name": "Fort (Horde Defense)",
+   "type": "Level",
+   "tags": [
+    "horde"
+   ],
+   "levelSettings": {
+    "voxelWorld": true,
+    "flatTerrain": false,
+    "customMeshPath": "",
+    "proceduralTerrain": false,
+    "gravity": 9.8,
+    "wind_x": 0,
+    "wind_z": 0,
+    "render_dist": 10,
+    "fog_density": 0.004,
+    "sun_angle": 50.0
+   }
+  },
+  {
+   "id": "plr",
+   "name": "Player",
+   "type": "Player"
+  },
+  {
+   "id": "wpn_spray",
+   "name": "Voxel Sprayer",
+   "type": "Weapon",
+   "weaponIdx": 0
+  },
+  {
+   "id": "wpn_turret",
+   "name": "Turret Placer",
+   "type": "Weapon",
+   "weaponIdx": 2
+  },
+  {
+   "id": "wpn_melee",
+   "name": "Melee",
+   "type": "Weapon",
+   "weaponIdx": 3
+  }
+ ],
+ "actions": [],
+ "globalVars": [
+  {
+   "name": "score",
+   "value": 0.0
+  }
+ ]
+}

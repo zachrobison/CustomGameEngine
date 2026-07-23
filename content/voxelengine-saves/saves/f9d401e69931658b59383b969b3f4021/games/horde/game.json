@@ -1,0 +1,20 @@
+{
+  "name": "Horde Defense",
+  "description": "Build voxel walls between waves. Melee what gets through. Keep the tower standing.",
+  "bootLevel": "fort",
+  "features": {
+    "vehicle": false,
+    "rocket": false,
+    "grapple": false,
+    "dash": true,
+    "jetpack": true,
+    "dimensionShift": false,
+    "thirdPerson": true
+  },
+  "weapons": [
+    "sprayer",
+    "eraser",
+    "turret",
+    "melee"
+  ]
+}

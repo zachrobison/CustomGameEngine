@@ -1,0 +1,18 @@
+{
+  "name": "Robot Souls-Like",
+  "description": "Robot vs. the pig mafia. Locked iso view, knife combat. Clear the garage: kill the Don, the shutter opens.",
+  "bootLevel": "garage",
+  "features": {
+    "vehicle": false,
+    "rocket": false,
+    "grapple": false,
+    "dash": true,
+    "jetpack": false,
+    "dimensionShift": false,
+    "thirdPerson": false,
+    "isoCamera": true
+  },
+  "weapons": [
+    "melee"
+  ]
+}

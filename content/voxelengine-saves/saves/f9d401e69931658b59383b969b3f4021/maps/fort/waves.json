@@ -1,0 +1,84 @@
+{
+ "basePos": [
+  0,
+  20,
+  0
+ ],
+ "baseHealth": 250.0,
+ "baseRadius": 4.0,
+ "breather": 12.0,
+ "spawnPads": [
+  [
+   -27,
+   20,
+   0
+  ],
+  [
+   27,
+   20,
+   0
+  ],
+  [
+   0,
+   20,
+   -27
+  ],
+  [
+   0,
+   20,
+   27
+  ]
+ ],
+ "waves": [
+  {
+   "count": 10,
+   "hp": 60,
+   "speed": 2.6,
+   "damage": 8
+  },
+  {
+   "count": 14,
+   "hp": 80,
+   "speed": 2.8,
+   "damage": 9
+  },
+  {
+   "count": 18,
+   "hp": 100,
+   "speed": 3.0,
+   "damage": 10
+  },
+  {
+   "count": 24,
+   "hp": 110,
+   "speed": 3.2,
+   "damage": 11
+  },
+  {
+   "count": 30,
+   "hp": 120,
+   "speed": 3.5,
+   "damage": 12
+  },
+  {
+   "count": 38,
+   "hp": 140,
+   "speed": 3.7,
+   "damage": 13
+  },
+  {
+   "count": 48,
+   "hp": 160,
+   "speed": 4.0,
+   "damage": 14
+  },
+  {
+   "count": 60,
+   "hp": 180,
+   "speed": 4.3,
+   "damage": 15
+  }
+ ],
+ "startTurrets": 3,
+ "endless": true
+}

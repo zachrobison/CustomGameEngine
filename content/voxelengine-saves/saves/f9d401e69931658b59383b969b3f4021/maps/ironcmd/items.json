@@ -1,0 +1,23 @@
+{
+ "idCtr": 1,
+ "npcCtr": 1,
+ "items": [
+  {
+   "id": "lvl",
+   "name": "Iron Command",
+   "type": "Level",
+   "tags": [
+    "rts"
+   ],
+   "levelSettings": {
+    "voxelWorld": false,
+    "flatTerrain": true,
+    "hideTerrain": true,
+    "fog_density": 0.0003,
+    "sun_angle": 55.0
+   }
+  }
+ ],
+ "actions": [],
+ "globalVars": []
+}
