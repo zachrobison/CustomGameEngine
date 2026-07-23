@@ -131,7 +131,12 @@
       "Bash(git --no-pager diff .claude/settings.local.json)",
       "Bash(git commit -q -m 'Update Claude Code local permission allowlist *)",
       "Bash(chmod +x play.command)",
-      "Bash(git commit -q -m 'Add double-clickable play.command launcher \\(build + run\\) *)"
+      "Bash(git commit -q -m 'Add double-clickable play.command launcher \\(build + run\\) *)",
+      "Bash(command -v gh)",
+      "Bash(git ls-remote *)",
+      "Bash(git checkout *)",
+      "Bash(git branch *)",
+      "Bash(git push *)"
     ]
   }
 }
