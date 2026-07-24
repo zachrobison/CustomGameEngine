@@ -306,8 +306,10 @@ int main(int argc, char** argv) {
     glfwSetScrollCallback(window, rtsScrollCb);
 
     // ── Games are data projects: pick one on the main menu ───────────────
-    std::vector<GameConfig> games =
-        GameConfig::scan(PlayerProfile::get().saveDir() + "/games");
+    std::string gamesDir = PlayerProfile::get().saveDir() + "/games";
+    std::vector<GameConfig> games = GameConfig::scan(gamesDir);
+    fprintf(stderr, "[boot] scanning games in: %s  → found %d\n",
+            gamesDir.c_str(), (int)games.size());
     GameConfig gameCfg;        // defaults = everything enabled
     bool       inMenu = true;
 

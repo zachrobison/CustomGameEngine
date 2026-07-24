@@ -22,6 +22,13 @@ public:
 
     std::string saveDir()   const; // returns per-player save directory path
 
+    // Point the profile/save/games root at an explicit folder (the games shipped
+    // next to the executable). Call before init(). When unset, falls back to
+    // ~/.voxelengine. This is what makes a downloaded build read its bundled
+    // games straight from the folder it was unzipped into — no copy, no reliance
+    // on HOME/USERPROFILE resolution.
+    static void setDataRoot(const std::string& root);
+
 private:
     PlayerProfile() = default;
     void loadOrCreateLocal();

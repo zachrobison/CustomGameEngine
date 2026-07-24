@@ -14,16 +14,29 @@ PlayerProfile& PlayerProfile::get() {
     return inst;
 }
 
-// Portable home directory: HOME on macOS/Linux, USERPROFILE on Windows.
+// Portable home directory: USERPROFILE on Windows, HOME elsewhere. (Windows is
+// checked first there because HOME is sometimes set by Git/MSYS to a different
+// place than where the rest of the app writes.)
 static std::string homeDir() {
-    if (const char* h = getenv("HOME")) return h;
 #if defined(_WIN32)
     if (const char* u = getenv("USERPROFILE")) return u;
     const char* d = getenv("HOMEDRIVE");
     const char* p = getenv("HOMEPATH");
     if (d && p) return std::string(d) + p;
-#endif
+    if (const char* h = getenv("HOME")) return h;
     return ".";
+#else
+    if (const char* h = getenv("HOME")) return h;
+    return ".";
+#endif
+}
+
+// When set (by Bootstrap, to the games folder shipped next to the exe), this is
+// the data root instead of ~/.voxelengine.
+static std::string g_dataRoot;
+void PlayerProfile::setDataRoot(const std::string& root) { g_dataRoot = root; }
+static std::string baseDir() {
+    return g_dataRoot.empty() ? (homeDir() + "/.voxelengine") : g_dataRoot;
 }
 
 static void mkdirp(const std::string& path) {
@@ -41,7 +54,7 @@ static std::string generateLocalId() {
 }
 
 void PlayerProfile::loadOrCreateLocal() {
-    std::string dir  = homeDir() + "/.voxelengine";
+    std::string dir  = baseDir();
     std::string path = dir + "/profile.txt";
     mkdirp(dir);
 
@@ -96,9 +109,10 @@ void PlayerProfile::init() {
 }
 
 std::string PlayerProfile::saveDir() const {
-    std::string base = homeDir() + "/.voxelengine/saves/" + m_id;
-    mkdirp(homeDir() + "/.voxelengine");
-    mkdirp(homeDir() + "/.voxelengine/saves");
+    std::string root = baseDir();
+    std::string base = root + "/saves/" + m_id;
+    mkdirp(root);
+    mkdirp(root + "/saves");
     mkdirp(base);
     return base;
 }

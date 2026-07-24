@@ -1,7 +1,9 @@
 #include "Bootstrap.h"
+#include "PlayerProfile.h"
 #include <filesystem>
 #include <cstdlib>
 #include <cstdint>
+#include <cstdio>
 
 #if defined(_WIN32)
   #include <windows.h>
@@ -31,18 +33,6 @@ static fs::path executablePath() {
 #endif
 }
 
-static fs::path homePath() {
-#if defined(_WIN32)
-    if (const char* h = std::getenv("USERPROFILE")) return h;
-    const char* d = std::getenv("HOMEDRIVE");
-    const char* p = std::getenv("HOMEPATH");
-    if (d && p) return fs::path(std::string(d) + p);
-    return ".";
-#else
-    const char* h = std::getenv("HOME");
-    return h ? fs::path(h) : fs::path(".");
-#endif
-}
 
 void Bootstrap::run() {
     std::error_code ec;
@@ -55,13 +45,17 @@ void Bootstrap::run() {
     if (fs::exists(base / "assets", ec))
         fs::current_path(base, ec);
 
-    // 2) First run: install the bundled games into ~/.voxelengine. Skipped once
-    //    the player already has a save folder (so their progress is preserved).
+    // 2) Point the game's data root straight at the bundled games folder that
+    //    shipped next to the executable. This is the robust part: no copying to
+    //    the home folder (which can silently fail on Windows) and no dependence
+    //    on HOME/USERPROFILE resolution — the games are read from exactly where
+    //    the download put them.
     fs::path bundled = base / "content" / "voxelengine-saves";
-    fs::path target  = homePath() / ".voxelengine";
-    if (fs::exists(bundled, ec) && !fs::exists(target / "saves", ec)) {
-        fs::create_directories(target, ec);
-        fs::copy(bundled, target,
-                 fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    if (fs::exists(bundled / "saves", ec)) {
+        PlayerProfile::setDataRoot(bundled.string());
+        std::fprintf(stderr, "[boot] data root = %s\n", bundled.string().c_str());
+    } else {
+        std::fprintf(stderr, "[boot] no bundled games at %s — using home folder\n",
+                     bundled.string().c_str());
     }
 }
