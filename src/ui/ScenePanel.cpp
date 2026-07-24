@@ -11,6 +11,9 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#if defined(_WIN32)
+  #define strcasecmp _stricmp   // POSIX name → MSVC's equivalent
+#endif
 #include <cmath>
 #include <fstream>
 
