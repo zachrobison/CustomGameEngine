@@ -27,6 +27,8 @@ public:
     void broadcast(const std::vector<uint8_t>& msg);  // frame + send to all peers
     bool recv(std::vector<uint8_t>& out);            // next inbound message, if any
 
+    static std::string localIP();                    // this machine's LAN IP (for others to join)
+
 private:
     struct Conn { int fd = -1; std::vector<uint8_t> rx; };
     bool hosting = false;

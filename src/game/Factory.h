@@ -37,6 +37,7 @@ public:
     bool        netConnected() const;
     bool        netActive = false;         // a networked match is running
     std::string netStatus() const;
+    std::string hostIp;                    // this machine's LAN IP when hosting
     char        joinIp[40] = "192.168.1.";  // editable in the mode screen
 
     // Your Hub — the base the enemy tries to destroy (lose it = defeat). Also

@@ -372,7 +372,7 @@ static const uint16_t IRON_PORT = 49813;
 
 static unsigned randomId(){ std::mt19937 r((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
                             unsigned v=r(); return v?v:1u; }
-void Factory::netHost(){ if(net.host(IRON_PORT)){ netActive=true; myId=randomId(); } }
+void Factory::netHost(){ if(net.host(IRON_PORT)){ netActive=true; myId=randomId(); hostIp=Net::localIP(); } }
 void Factory::netJoin(const char* ip){ if(net.join(ip?ip:"127.0.0.1",IRON_PORT)){ netActive=true; myId=randomId(); } }
 bool Factory::netConnected() const { return net.connected(); }
 std::string Factory::netStatus() const { return net.status(); }
@@ -921,10 +921,26 @@ void Factory::renderHud(int winW,int winH){
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x-96);
                 ImGui::InputText("##ip",joinIp,sizeof(joinIp)); ImGui::SameLine();
                 if(ImGui::Button("JOIN",{88,0})){ netJoin(joinIp); multiplayer=true; }
-                ImGui::TextDisabled("Host, then tell everyone your LAN IP. Any number of players. Port %u.", (unsigned)IRON_PORT);
+                ImGui::TextDisabled("Host on one PC, then Join from the others using the host's IP. Port %u.", (unsigned)IRON_PORT);
+                // Surface why a join attempt failed (otherwise it looks like nothing happened).
+                std::string st=netStatus();
+                if(st!="offline") ImGui::TextColored({1.f,0.55f,0.5f,1.f},"Join failed: %s", st.c_str());
+            } else if(net.isHost()){
+                ImGui::TextColored({0.6f,1.f,0.7f,1.f},"HOSTING — %s", netStatus().c_str());
+                if(!hostIp.empty()){
+                    ImGui::TextColored({1.f,0.95f,0.5f,1.f},"Friends type this to Join:");
+                    ImGui::TextColored({0.7f,1.f,1.f,1.f},"    %s   (port %u)", hostIp.c_str(), (unsigned)IRON_PORT);
+                } else {
+                    ImGui::TextDisabled("(couldn't detect your LAN IP — find it in system settings)");
+                }
+                ImGui::TextDisabled("Others can keep joining while you play. Last hub standing wins.");
+                if(ImGui::Button("ENTER LOBBY",{ImGui::GetContentRegionAvail().x,40})){
+                    multiplayer=true; phase=P_LOBBY; lobbyEnter=true; }
+                if(ImGui::Button("Cancel / stop hosting",{ImGui::GetContentRegionAvail().x,0})){
+                    net.close(); netActive=false; multiplayer=false; }
             } else {
-                ImGui::TextColored({0.6f,1.f,0.7f,1.f},"%s%s", net.isHost()?"Hosting — ":"Connected — ", netStatus().c_str());
-                ImGui::TextDisabled("Others can still join while you play. Last hub standing wins.");
+                ImGui::TextColored({0.6f,1.f,0.7f,1.f},"CONNECTED — %s", netStatus().c_str());
+                ImGui::TextDisabled("Last hub standing wins.");
                 if(ImGui::Button("ENTER LOBBY",{ImGui::GetContentRegionAvail().x,40})){
                     multiplayer=true; phase=P_LOBBY; lobbyEnter=true; }
                 if(ImGui::Button("Cancel / disconnect",{ImGui::GetContentRegionAvail().x,0})){

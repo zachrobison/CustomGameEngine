@@ -54,12 +54,52 @@ bool Net::join(const std::string& ip, uint16_t port){
     int fd=(int)socket(AF_INET,SOCK_STREAM,0);
     if(fd<0){ statusMsg="socket failed"; return false; }
     sockaddr_in a{}; a.sin_family=AF_INET; a.sin_port=htons(port);
-    if(inet_pton(AF_INET,ip.c_str(),&a.sin_addr)<=0){ statusMsg="bad IP"; NET_CLOSE(fd); return false; }
-    if(connect(fd,(sockaddr*)&a,sizeof(a))<0){ statusMsg="connect failed"; NET_CLOSE(fd); return false; }
-    setNonBlocking(fd); hosting=false;
+    if(inet_pton(AF_INET,ip.c_str(),&a.sin_addr)<=0){ statusMsg="bad IP address"; NET_CLOSE(fd); return false; }
+
+    // Non-blocking connect with a short timeout so a wrong IP or a blocked host
+    // reports a clear failure instead of freezing the game.
+    setNonBlocking(fd);
+    int r = connect(fd,(sockaddr*)&a,sizeof(a));
+    if(r < 0){
+        int e = NET_ERRNO;
+    #if defined(_WIN32)
+        bool pending = (e==WSAEWOULDBLOCK || e==WSAEINPROGRESS);
+    #else
+        bool pending = (e==EINPROGRESS || e==EWOULDBLOCK);
+    #endif
+        if(!pending){ statusMsg="couldn't reach host"; NET_CLOSE(fd); return false; }
+        fd_set wf; FD_ZERO(&wf); FD_SET(fd,&wf);
+        timeval tv{4,0};
+        r = select(fd+1, nullptr, &wf, nullptr, &tv);
+        if(r <= 0){ statusMsg="host not found (check IP / firewall)"; NET_CLOSE(fd); return false; }
+        int soerr=0; socklen_t sl=sizeof(soerr);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&soerr, &sl);
+        if(soerr != 0){ statusMsg="host refused the connection"; NET_CLOSE(fd); return false; }
+    }
+    hosting=false;
     conns.clear(); Conn c; c.fd=fd; conns.push_back(std::move(c));
     statusMsg="connected to host";
     return true;
+}
+
+// Best-effort local LAN IP (the address other machines type to join). Uses the
+// "UDP connect to a public IP, then read our own socket name" trick — no packets
+// are actually sent; it just asks the OS which local interface would route out.
+std::string Net::localIP(){
+    wsaInit();
+    int s=(int)socket(AF_INET,SOCK_DGRAM,0);
+    if(s<0) return "";
+    sockaddr_in a{}; a.sin_family=AF_INET; a.sin_port=htons(53);
+    inet_pton(AF_INET,"8.8.8.8",&a.sin_addr);
+    std::string ip;
+    if(connect(s,(sockaddr*)&a,sizeof(a))==0){
+        sockaddr_in local{}; socklen_t len=sizeof(local);
+        if(getsockname(s,(sockaddr*)&local,&len)==0){
+            char buf[64]; if(inet_ntop(AF_INET,&local.sin_addr,buf,sizeof(buf))) ip=buf;
+        }
+    }
+    NET_CLOSE(s);
+    return ip;
 }
 
 void Net::close(){
