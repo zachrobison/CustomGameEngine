@@ -50,17 +50,24 @@ void PlayerProfile::loadOrCreateLocal() {
         std::getline(f, m_id);
         std::getline(f, m_name);
     }
-    // No saved profile yet? If the download shipped a games folder under some
-    // profile id (saves/<id>/games), adopt that id so the bundled games are
-    // found — otherwise a fresh random id would point at an empty folder.
-    if (m_id.empty()) {
-        std::error_code ec;
-        std::filesystem::path savesRoot = std::filesystem::path(dir) / "saves";
+
+    // Make the download reliably playable. The games ship under a specific
+    // profile id (saves/<id>/games). If the profile we loaded doesn't actually
+    // have games — a fresh machine (no profile.txt) OR a machine left with an
+    // empty random profile by an earlier broken build — adopt whichever shipped
+    // profile does have games. This self-heals both cases.
+    std::error_code ec;
+    std::filesystem::path savesRoot = std::filesystem::path(dir) / "saves";
+    auto profileHasGames = [&](const std::string& id) {
+        return !id.empty() &&
+               std::filesystem::exists(savesRoot / id / "games", ec);
+    };
+    if (!profileHasGames(m_id)) {
         for (const auto& e : std::filesystem::directory_iterator(savesRoot, ec)) {
             if (e.is_directory() &&
                 std::filesystem::exists(e.path() / "games", ec)) {
-                m_id   = e.path().filename().string();
-                m_name = "Player";
+                m_id   = e.path().filename().string();   // adopt the games profile
+                if (m_name.empty()) m_name = "Player";
                 break;
             }
         }
@@ -71,7 +78,7 @@ void PlayerProfile::loadOrCreateLocal() {
     }
     {   // persist whichever id we settled on
         std::ofstream out(path);
-        out << m_id << "\n" << m_name << "\n";
+        out << m_id << "\n" << (m_name.empty() ? "Player" : m_name) << "\n";
     }
 }
 

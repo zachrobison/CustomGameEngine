@@ -60,7 +60,7 @@ jobs:
         run: |
           $D = "IronCommand-Windows"
           New-Item -ItemType Directory -Force -Path $D | Out-Null
-          Copy-Item build/Release/VoxelEngine.exe $D/
+          Copy-Item build/Release/VoxelEngine.exe "$D/Iron Command.exe"
           Copy-Item -Recurse build/Release/assets  $D/assets
           Copy-Item -Recurse build/Release/shaders $D/shaders
           Copy-Item -Recurse content               $D/content
@@ -87,7 +87,7 @@ jobs:
           body: |
             **Just download, unzip, and play — no setup.**
 
-            - **Windows:** download `IronCommand-Windows.zip`, unzip, double-click `VoxelEngine.exe`.
+            - **Windows:** download `IronCommand-Windows.zip`, unzip, double-click `Iron Command.exe`.
               (First launch: Windows SmartScreen may warn — click *More info → Run anyway*.)
             - **macOS:** download `IronCommand-macOS.zip`, unzip, then **right-click `Iron Command.app` → Open** the first time (it's unsigned).
 
