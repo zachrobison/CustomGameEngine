@@ -3,11 +3,11 @@
 #include "../character/EntityManager.h"
 #include "../ui/ScenePanel.h"
 #include "../platform/PlayerProfile.h"
-#include <sys/stat.h>
-#include <dirent.h>
+#include <filesystem>
 
 static void mkdirp(const std::string& path) {
-    mkdir(path.c_str(), 0755);
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);   // portable, recursive
 }
 
 std::string MapManager::levelDir(const std::string& id) const {
@@ -17,15 +17,12 @@ std::string MapManager::levelDir(const std::string& id) const {
 std::vector<MapManager::LevelInfo> MapManager::listLevels() const {
     std::vector<LevelInfo> out;
     std::string mapsPath = PlayerProfile::get().saveDir() + "/maps";
-    DIR* d = opendir(mapsPath.c_str());
-    if (!d) return out;
-    while (dirent* e = readdir(d)) {
-        std::string name = e->d_name;
-        if (name == "." || name == "..") continue;
-        if (e->d_type != DT_DIR) continue;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(mapsPath, ec)) {
+        if (!e.is_directory()) continue;
+        std::string name = e.path().filename().string();
         out.push_back({name, name});
     }
-    closedir(d);
     return out;
 }
 
@@ -43,8 +40,8 @@ bool MapManager::saveLevel(const std::string& id, const World& world,
 bool MapManager::loadLevel(const std::string& id, World& world,
                            EntityManager& entities, ScenePanel& scene) const {
     std::string dir = levelDir(id);
-    struct stat st;
-    if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return false;
 
     world.load(dir + "/terrain.vox");
     entities.load(dir + "/entities.bin");

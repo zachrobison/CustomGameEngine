@@ -7,7 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <unistd.h>
+#include <filesystem>
 
 // ── Interpolation helpers ─────────────────────────────────────────────────
 
@@ -260,11 +260,11 @@ bool load(const std::string& path, AnimationClip& out) {
 }
 
 bool downloadAndLoad(const std::string& url, AnimationClip& out, std::string& statusOut) {
-    // Write to a temp file
-    char tmpPath[] = "/tmp/voxengine_bvh_XXXXXX";
-    int fd = mkstemp(tmpPath);
-    if (fd < 0) { statusOut = "Failed to create temp file"; return false; }
-    close(fd);
+    // Write to a temp file (portable temp dir; curl -o creates the file)
+    std::error_code tec;
+    std::string tmpPath =
+        (std::filesystem::temp_directory_path(tec) / "voxengine_bvh.tmp").string();
+    if (tec) { statusOut = "Failed to locate temp dir"; return false; }
 
     // Use curl to download
     std::string cmd = "curl -s -L --max-time 15 -o '";
@@ -276,12 +276,12 @@ bool downloadAndLoad(const std::string& url, AnimationClip& out, std::string& st
     int ret = system(cmd.c_str());
     if (ret != 0) {
         statusOut = "curl failed (exit " + std::to_string(ret) + ")";
-        unlink(tmpPath);
+        std::filesystem::remove(tmpPath, tec);
         return false;
     }
 
     bool ok = load(tmpPath, out);
-    unlink(tmpPath);
+    std::filesystem::remove(tmpPath, tec);
 
     if (ok) {
         statusOut = "Loaded: " + out.name + " (" + std::to_string(out.frames.size()) + " frames)";

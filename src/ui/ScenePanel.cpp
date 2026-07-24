@@ -10,7 +10,6 @@
 #include "../vendor/json.hpp"
 #include <cstring>
 #include <cstdio>
-#include <dirent.h>
 #include <algorithm>
 #include <cmath>
 #include <fstream>

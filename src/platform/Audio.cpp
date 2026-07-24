@@ -14,7 +14,7 @@
 
 #include <cstdio>
 #include <map>
-#include <sys/stat.h>
+#include <filesystem>
 #include <vector>
 
 struct Audio::Impl {
@@ -33,8 +33,8 @@ Audio& Audio::get() {
 }
 
 static bool fileExists(const std::string& p) {
-    struct stat st;
-    return stat(p.c_str(), &st) == 0;
+    std::error_code ec;
+    return std::filesystem::exists(p, ec);
 }
 
 // name → assets/sounds/<name>.ogg|.wav (cached; empty string = missing)

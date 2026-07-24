@@ -62,6 +62,8 @@ endif()
 add_executable(VoxelEngine ${SOURCES})
 target_include_directories(VoxelEngine PRIVATE src)
 target_link_libraries(VoxelEngine imgui_lib glfw glm::glm)
+# MSVC needs this for M_PI et al. from <cmath>; harmless elsewhere.
+target_compile_definitions(VoxelEngine PRIVATE _USE_MATH_DEFINES)
 
 if(APPLE)
   set_source_files_properties(

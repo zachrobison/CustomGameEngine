@@ -1,7 +1,7 @@
 #include "GameConfig.h"
 #include "../vendor/json.hpp"
 #include <fstream>
-#include <dirent.h>
+#include <filesystem>
 #include <algorithm>
 
 using json = nlohmann::json;
@@ -40,14 +40,11 @@ GameConfig GameConfig::load(const std::string& dir) {
 
 std::vector<GameConfig> GameConfig::scan(const std::string& gamesRoot) {
     std::vector<GameConfig> out;
-    DIR* d = opendir(gamesRoot.c_str());
-    if (!d) return out;
-    while (dirent* e = readdir(d)) {
-        std::string nm = e->d_name;
-        if (nm == "." || nm == ".." || e->d_type != DT_DIR) continue;
-        out.push_back(load(gamesRoot + "/" + nm));
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(gamesRoot, ec)) {
+        if (!e.is_directory()) continue;
+        out.push_back(load(e.path().string()));
     }
-    closedir(d);
     std::sort(out.begin(), out.end(),
               [](const GameConfig& a, const GameConfig& b) { return a.name < b.name; });
     return out;
