@@ -144,7 +144,14 @@
       "Bash(./nettest)",
       "Bash(c++ -std=c++17 relaytest.cpp /Users/zrobison/ClaudeProjects/engine/src/net/Net.cpp -o relaytest)",
       "Bash(./relaytest)",
-      "Bash(chmod +x \"Iron Command.command\")"
+      "Bash(chmod +x \"Iron Command.command\")",
+      "Bash(git commit *)",
+      "Bash(gh pr *)",
+      "Bash(gh repo *)",
+      "Bash(git fetch *)",
+      "Bash(pkill -f VoxelEngine)",
+      "Bash(otool -L VoxelEngine)",
+      "Bash(git pull *)"
     ]
   }
 }
