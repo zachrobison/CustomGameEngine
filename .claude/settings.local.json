@@ -136,7 +136,15 @@
       "Bash(git ls-remote *)",
       "Bash(git checkout *)",
       "Bash(git branch *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(gh pr create --base main --head add-launcher --title 'Add double-click launcher for easy first-run' --body ' *)",
+      "Bash(/Applications/Blender.app/Contents/MacOS/Blender -b --python /private/tmp/claude-501/-Users-zrobison-ClaudeProjects-engine/7dc3d806-8e5e-4473-9f04-68b4be162c75/scratchpad/conv_hand2.py -- /private/tmp/claude-501/-Users-zrobison-ClaudeProjects-engine/7dc3d806-8e5e-4473-9f04-68b4be162c75/scratchpad/wizard_hand_fixed.fbx /private/tmp/claude-501/-Users-zrobison-ClaudeProjects-engine/7dc3d806-8e5e-4473-9f04-68b4be162c75/scratchpad/wizard_hand.glb)",
+      "Bash(/Applications/Blender.app/Contents/MacOS/Blender -b --python __TRACKED_VAR__/conv_hand2.py -- __TRACKED_VAR__/wizard_hand_c.fbx __TRACKED_VAR__/wizard_hand.glb)",
+      "Bash(c++ -std=c++17 nettest.cpp /Users/zrobison/ClaudeProjects/engine/src/net/Net.cpp -o nettest)",
+      "Bash(./nettest)",
+      "Bash(c++ -std=c++17 relaytest.cpp /Users/zrobison/ClaudeProjects/engine/src/net/Net.cpp -o relaytest)",
+      "Bash(./relaytest)",
+      "Bash(chmod +x \"Iron Command.command\")"
     ]
   }
 }

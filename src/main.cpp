@@ -1,5 +1,5 @@
 #define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl3.h>
+#include "gl_compat.h"
 #include <GLFW/glfw3.h>
 
 #include "imgui.h"
@@ -55,8 +55,18 @@ static void rtsScrollCb(GLFWwindow* w, double xo, double yo) {
         g_factoryPtr->cycleType(yo > 0 ? 1 : -1);
 }
 
-int main() {
+int main(int argc, char** argv) {
     srand((unsigned)time(nullptr));
+
+    // Optional: boot straight into a game by id (e.g. `VoxelEngine ironcommand`).
+    // Used by the dedicated Iron Command launcher so it skips the menu entirely.
+    std::string bootGameId;
+    for (int i = 1; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--game" && i + 1 < argc) bootGameId = argv[++i];
+        else if (a.rfind("--game=", 0) == 0) bootGameId = a.substr(7);
+        else if (a[0] != '-') bootGameId = a;   // bare id
+    }
 
     PlayerProfile::get().init();
     Audio::get().init();
@@ -73,6 +83,13 @@ int main() {
     if (!window) { fputs("Window creation failed\n", stderr); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
+
+#if !defined(__APPLE__)
+    // Windows/Linux need a loader to reach modern GL entry points.
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) { fputs("glewInit failed\n", stderr); glfwTerminate(); return 1; }
+    glGetError();   // clear the benign INVALID_ENUM GLEW can leave behind
+#endif
 
     // ImGui
     IMGUI_CHECKVERSION();
@@ -328,6 +345,12 @@ int main() {
             player.velocity        = {0.f, 0.f, 0.f};
         }
     };
+
+    // Boot straight into a requested game, bypassing the menu.
+    if (!bootGameId.empty()) {
+        for (size_t i = 0; i < games.size(); i++)
+            if (games[i].id == bootGameId) { applyGame(games[i]); inMenu = false; break; }
+    }
 
     // Input state
     bool   mouseCaptured = true;
@@ -646,8 +669,8 @@ int main() {
                 isoZoom = std::min(isoZoom + 20.f * dt, 70.f);
         }
 
-        // Update (frozen during Iron Command's front-end menus)
-        if (!(gameCfg.factory && factory.inMenuPhase()))
+        // Update (frozen during Iron Command's front-end menus and on defeat)
+        if (!(gameCfg.factory && (factory.inMenuPhase() || factory.defeated())))
             player.update(window, world, entities, worldSettings, playerSettings,
                           keyBinds, dt, mouseCaptured, &props);
 
@@ -664,12 +687,23 @@ int main() {
         if (raceBots.active()) raceBots.update(dt);
 
         // ── Iron Command: first-person build tool + factory tick ──────────
-        if (gameCfg.factory && factory.active) {
+        if (gameCfg.factory && factory.active && factory.defeated()) {
+            // Defeated: everything frozen, ENTER restarts the match
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            static bool enterPrev = false;
+            bool en = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
+            if (en && !enterPrev) {
+                factory.reset((unsigned)time(nullptr));
+                factoryTrees.buildFrom(factory.treeList(), 20.f);
+                player.health = player.maxHealth;
+            }
+            enterPrev = en;
+        } else if (gameCfg.factory && factory.active) {
             static bool bPrev=false, rPrev=false, lmbPrev=false, rmbPrev=false, ePrev=false;
             bool bNow = glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS;
             if (bNow && !bPrev) factory.toggleBuild();
             bPrev = bNow;
-            for (int k = 0; k < 7; k++)
+            for (int k = 0; k < 8; k++)
                 if (glfwGetKey(window, GLFW_KEY_1 + k) == GLFW_PRESS) factory.selectType(k);
             bool rNow = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
             if (factory.buildMode && rNow && !rPrev) factory.rotateGhost();
@@ -682,14 +716,14 @@ int main() {
             bool interactEdge = eNow && !ePrev;
             lmbPrev = lmb; rmbPrev = rmb; ePrev = eNow;
             // Build tool / menu / targeting all take over LMB (no weapon fire)
-            player.suppressFire = factory.buildMode || factory.menuOpen || factory.targeting();
+            player.suppressFire = factory.buildMode || factory.menuOpen || factory.targeting() || factory.commandMapOpen();
             // Menu releases the cursor so you can click recipe buttons
-            // Front-end menus (mode/lobby/drop) release the cursor too
+            // Front-end menus (mode/lobby/drop) + hub command map release the cursor too
             glfwSetInputMode(window, GLFW_CURSOR,
-                             (factory.menuOpen || factory.inMenuPhase()) ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                             (factory.menuOpen || factory.inMenuPhase() || factory.commandMapOpen()) ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
             // LMB places when building OR when picking a deploy point; menu
             // clicks are consumed by ImGui, so don't forward them.
-            bool factoryPlace = lmbEdge && !factory.menuOpen &&
+            bool factoryPlace = lmbEdge && !factory.menuOpen && !factory.commandMapOpen() &&
                                 (factory.buildMode || factory.targeting());
             bool deleteEdge = factory.buildMode && rmbEdge;
             factory.update(dt, now, player.camera.position, player.camera.forward(),
@@ -969,6 +1003,7 @@ int main() {
         glm::mat4 view = player.camera.getView();
         glm::mat4 proj = player.camera.getProjection(aspect);
 
+
         // Locked isometric camera: orthographic, following the player from
         // a fixed diagonal. The logical eye (physics/aim) stays on the body.
         if (gameCfg.isoCamera && mouseCaptured)   // cursor stays visible for aiming
@@ -1178,10 +1213,14 @@ int main() {
             glm::vec3 u = player.camera.up();
             glm::vec3 hp = player.camera.position + f*0.75f - r*0.34f - u*0.42f;
             float s = 0.09f;   // model is ~12u; shrink to hand size
-            // Longest axis (model +X) points forward, out of the screen.
-            glm::mat4 hm(glm::vec4(-f*s,0), glm::vec4(u*s,0), glm::vec4(r*s,0), glm::vec4(hp,1));
+            // Longest axis (model +X) points forward; model +Z is mirrored
+            // (negated) so the hand shows as its mirror image. A reflection
+            // reverses winding, so flip the front-face while drawing it.
+            glm::mat4 hm(glm::vec4(-f*s,0), glm::vec4(u*s,0), glm::vec4(-r*s,0), glm::vec4(hp,1));
+            glFrontFace(GL_CW);
             wizardHand.renderMatrix(proj * view, hm, sunDir,
                                     worldSettings.fog_density, player.camera.position);
+            glFrontFace(GL_CCW);
         }
 
         // Animated player avatar (visible in third person only)
