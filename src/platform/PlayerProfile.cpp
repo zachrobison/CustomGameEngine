@@ -50,9 +50,26 @@ void PlayerProfile::loadOrCreateLocal() {
         std::getline(f, m_id);
         std::getline(f, m_name);
     }
+    // No saved profile yet? If the download shipped a games folder under some
+    // profile id (saves/<id>/games), adopt that id so the bundled games are
+    // found — otherwise a fresh random id would point at an empty folder.
+    if (m_id.empty()) {
+        std::error_code ec;
+        std::filesystem::path savesRoot = std::filesystem::path(dir) / "saves";
+        for (const auto& e : std::filesystem::directory_iterator(savesRoot, ec)) {
+            if (e.is_directory() &&
+                std::filesystem::exists(e.path() / "games", ec)) {
+                m_id   = e.path().filename().string();
+                m_name = "Player";
+                break;
+            }
+        }
+    }
     if (m_id.empty()) {
         m_id   = generateLocalId();
         m_name = "Player";
+    }
+    {   // persist whichever id we settled on
         std::ofstream out(path);
         out << m_id << "\n" << m_name << "\n";
     }
