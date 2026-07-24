@@ -9,20 +9,30 @@ A small C++/OpenGL game engine and a set of games built on it:
 
 Pick a game from the in-engine main menu.
 
-## Easiest way to play (double-click)
+## ▶ Play now — no setup (recommended)
 
-No Terminal needed after the one-time toolchain install below:
+Grab a ready-to-run build from the **[Releases page](../../releases/latest)** —
+nothing to install, no compiler, no libraries:
 
-- **`Iron Command.command`** (macOS) / **`Iron Command.bat`** (Windows) —
-  double-click to build if needed and **launch straight into Iron Command**,
-  skipping the menu.
-- **`play.command`** — same, but opens the game menu so you can pick any game.
+- **Windows:** download `IronCommand-Windows.zip`, unzip, double-click
+  `VoxelEngine.exe`. (First launch, Windows SmartScreen may warn — click
+  *More info → Run anyway*.)
+- **macOS:** download `IronCommand-macOS.zip`, unzip, then **right-click
+  `Iron Command.app` → Open** the first time (it's an unsigned free app).
 
-On the first run these install the bundled games and compile the engine (a
-minute or two); after that they start instantly. macOS may ask you to allow the
-script the first time (right-click → Open).
+That's it — it drops straight into Iron Command and installs the games on first
+run. LAN free-for-all: one person Hosts, everyone else Joins by the host's LAN IP.
 
-You can also boot any game by id from a terminal: `./VoxelEngine ironcommand`.
+*(Releases are built automatically by GitHub Actions on macOS + Windows — see
+`.github/workflows/release.yml`.)*
+
+---
+
+## Build it yourself (developers only)
+
+Only needed if you want to change the code. The double-click launchers
+`Iron Command.command` / `.bat` (or `play.command` for the menu) build and run
+from source; you can also `./VoxelEngine ironcommand` to boot a game by id.
 
 ---
 

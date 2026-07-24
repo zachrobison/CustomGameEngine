@@ -3,7 +3,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <ctime>
-#include <sys/stat.h>
+#include <filesystem>
 
 #ifdef HAVE_STEAMWORKS
   #include "steam/steam_api.h"
@@ -14,13 +14,21 @@ PlayerProfile& PlayerProfile::get() {
     return inst;
 }
 
+// Portable home directory: HOME on macOS/Linux, USERPROFILE on Windows.
 static std::string homeDir() {
-    const char* h = getenv("HOME");
-    return h ? h : ".";
+    if (const char* h = getenv("HOME")) return h;
+#if defined(_WIN32)
+    if (const char* u = getenv("USERPROFILE")) return u;
+    const char* d = getenv("HOMEDRIVE");
+    const char* p = getenv("HOMEPATH");
+    if (d && p) return std::string(d) + p;
+#endif
+    return ".";
 }
 
 static void mkdirp(const std::string& path) {
-    mkdir(path.c_str(), 0755);
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);   // portable, recursive
 }
 
 // Generates a simple random hex ID that stays consistent across sessions

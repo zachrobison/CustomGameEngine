@@ -25,6 +25,7 @@
 #include "game/Factory.h"
 #include "ui/UI.h"
 #include "platform/PlayerProfile.h"
+#include "platform/Bootstrap.h"
 #include "platform/KeyBinds.h"
 #include "platform/Audio.h"
 #include "character/Character.h"
@@ -42,6 +43,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <string>
+#include <fstream>
 #include <map>
 
 // Mouse-wheel routing (GLFW callbacks can't capture): RTS zoom + factory
@@ -58,6 +60,10 @@ static void rtsScrollCb(GLFWwindow* w, double xo, double yo) {
 int main(int argc, char** argv) {
     srand((unsigned)time(nullptr));
 
+    // Self-contained startup: cd to the app's folder + install games on first
+    // run, so a downloaded build just works by double-click (no setup).
+    Bootstrap::run();
+
     // Optional: boot straight into a game by id (e.g. `VoxelEngine ironcommand`).
     // Used by the dedicated Iron Command launcher so it skips the menu entirely.
     std::string bootGameId;
@@ -66,6 +72,14 @@ int main(int argc, char** argv) {
         if (a == "--game" && i + 1 < argc) bootGameId = argv[++i];
         else if (a.rfind("--game=", 0) == 0) bootGameId = a.substr(7);
         else if (a[0] != '-') bootGameId = a;   // bare id
+    }
+    // Packaged single-game builds ship a `boot.txt` next to the executable
+    // (e.g. "ironcommand") so a plain double-click skips the menu. CLI wins.
+    if (bootGameId.empty()) {
+        std::ifstream bf("boot.txt");
+        if (bf) { std::getline(bf, bootGameId);
+            while (!bootGameId.empty() && (bootGameId.back()=='\n' || bootGameId.back()=='\r' || bootGameId.back()==' '))
+                bootGameId.pop_back(); }
     }
 
     PlayerProfile::get().init();

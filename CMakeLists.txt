@@ -4,6 +4,12 @@ project(VoxelEngine CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Statically link the MSVC C runtime on Windows so the shipped .exe needs no
+# "Visual C++ Redistributable" install on the player's machine.
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 include(FetchContent)
 
 # ── Dear ImGui ────────────────────────────────────────────────────────────────
@@ -13,9 +19,24 @@ FetchContent_Declare(imgui
 )
 FetchContent_MakeAvailable(imgui)
 
-# ── Libraries (installed via the platform's package manager / vcpkg) ──────────
-find_package(glfw3 REQUIRED)
-find_package(glm   REQUIRED)
+# ── GLFW + GLM built from source and baked into the binary ────────────────────
+# This is what lets players just download & run: no glfw/glm to install, and no
+# glfw DLL to ship — it's compiled straight into the executable.
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(glfw
+  GIT_REPOSITORY https://github.com/glfw/glfw.git
+  GIT_TAG        3.4
+)
+FetchContent_MakeAvailable(glfw)
+
+FetchContent_Declare(glm
+  GIT_REPOSITORY https://github.com/g-truc/glm.git
+  GIT_TAG        1.0.1
+)
+FetchContent_MakeAvailable(glm)
 
 add_library(imgui_lib STATIC
   ${imgui_SOURCE_DIR}/imgui.cpp
@@ -29,7 +50,6 @@ target_include_directories(imgui_lib PUBLIC
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
 )
-# Inherit GLFW's include dirs portably (no hardcoded Homebrew path).
 target_link_libraries(imgui_lib PUBLIC glfw)
 
 # ── Engine executable ─────────────────────────────────────────────────────────
@@ -59,6 +79,9 @@ else()
   find_package(OpenGL REQUIRED)
   find_package(GLEW   REQUIRED)
   target_link_libraries(VoxelEngine GLEW::GLEW OpenGL::GL)
+  if(WIN32)
+    target_compile_definitions(VoxelEngine PRIVATE GLEW_STATIC)  # single-file .exe
+  endif()
 endif()
 
 # Copy shaders and assets next to the executable on each build
