@@ -1,6 +1,6 @@
 #pragma once
 #define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl3.h>
+#include "../gl_compat.h"
 #include <glm/glm.hpp>
 
 class Camera;

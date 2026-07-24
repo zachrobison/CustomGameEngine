@@ -5,6 +5,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include "imgui.h"
 #include <random>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -41,14 +42,16 @@ static const Recipe ASM_R[] = {
 static const Recipe BARR_R[] = {{-1,0,-1,0,-1,0, 999.f, "Robot Storage", -1}};
 // Terminal: no production; interacting opens the command map.
 static const Recipe TERM_R[] = {{-1,0,-1,0,-1,0, 999.f, "Command robots", -1}};
+// Hub: your home base; placing it (re)locates the objective. No recipe.
+static const Recipe HUB_R[] = {{-1,0,-1,0,-1,0, 999.f, "Home Base", -1}};
 struct RSet{ const Recipe* r; int n; };
 static const RSet RSETS[Factory::MTYPE_N] =
-    {{MINER_R,3},{SMELT_R,1},{CONS_R,3},{ASM_R,6},{BARR_R,1},{TERM_R,1}};
+    {{MINER_R,3},{SMELT_R,1},{CONS_R,3},{ASM_R,6},{BARR_R,1},{TERM_R,1},{HUB_R,1}};
 static const Recipe& mrec(int type,int recipe){ const RSet&s=RSETS[type];
     return s.r[recipe % s.n]; }
 
 static const char* TNAME[Factory::TOOL_N] =
-    {"Miner","Smelter","Constructor","Assembler","Barracks","Terminal","Conveyor"};
+    {"Miner","Smelter","Constructor","Assembler","Barracks","Terminal","Hub","Conveyor"};
 static const char* INAME[Factory::ITEM_N] = {"Ore","Ingot","Screw","Plate","Rod","Part","Robot"};
 static const glm::vec3 ICOL[Factory::ITEM_N] = {
     {0.50f,0.62f,0.58f},{0.95f,0.6f,0.28f},{0.72f,0.74f,0.8f},
@@ -165,6 +168,7 @@ glm::vec3 Factory::footprint(int type) const{
         case ASSEMBLER:   return {2.0f,2.6f,1.5f};
         case BARRACKS:    return {3.5f,3.4f,4.2f};  // large
         case TERMINAL:    return {1.3f,1.8f,1.3f};
+        case HUB:         return {4.0f,5.0f,4.0f};   // large home base
         default:          return {2.0f,2.6f,1.5f};
     }
 }
@@ -242,8 +246,10 @@ void Factory::reset(unsigned seed){
     machines.clear(); belts.clear(); nodes.clear(); deploys.clear();
     enemies.clear(); tracers.clear(); enemySpawnCd=10.f;
     ebasePos={mapHalf*0.7f,0.f,mapHalf*0.7f};   // opposite the player start
-    ebaseHp=ebaseMax; ebaseAlive=true; won=false;
+    ebaseHp=ebaseMax; ebaseAlive=!netActive; won=false; lost=false;  // net: real players replace the AI base
     aiEconomy=0.f; gameClock=0.f; enemySpawnCd=6.f;
+    opps.clear(); everSawOpp=false; netSendCd=0.f;
+    hubAlive=false; cmdMapOpen=false; fenceBank=0; // hub is placed on drop
     active=true; buildMode=false; selType=0; ghostYaw=0.f; pendingSrc=-1; aimedMachine=-1;
     beltPts.clear();
     menuOpen=false; mapMode=false; pendingRecipe=-1; menuMachine=-1; deployTarget=-1;
@@ -257,16 +263,41 @@ void Factory::reset(unsigned seed){
     std::mt19937 rng(seed?seed:1234u);
     std::uniform_real_distribution<float> U(-mapHalf+14.f,mapHalf-14.f);
     trees.clear();
-    int n=24+rng()%16;   // ore nodes scale with the bigger map
+    int n=36+rng()%22;   // ore nodes scale with the bigger map
     for(int i=0;i<n;i++){ float x=std::round(U(rng)/GRID)*GRID, z=std::round(U(rng)/GRID)*GRID;
         nodes.push_back({{x,GROUND,z}, 3.5f}); }
-    int nt=130+rng()%70; // scattered trees (obstacles + decor)
-    for(int i=0;i<nt;i++){ float x=U(rng), z=U(rng);
-        if(glm::length(glm::vec2(x,z))<22.f) continue;                 // clear player start
-        if(glm::length(glm::vec2(x-ebasePos.x,z-ebasePos.z))<28.f) continue; // clear enemy base
-        bool onNode=false; for(auto&nd:nodes) if(glm::length(glm::vec2(x-nd.pos.x,z-nd.pos.z))<5.f) onNode=true;
-        if(onNode) continue;
-        trees.push_back({x, 1.5f+(rng()%16)/10.f, z}); }   // x, radius(y), z
+    // ── Biome layout: forests (dense trees) + plains (open) + passageways ──
+    std::vector<glm::vec3> forests;   // x, radius(y), z
+    int nf=5+rng()%4;
+    for(int i=0;i<nf;i++){ forests.push_back({U(rng), 34.f+(rng()%42), U(rng)}); }
+    std::vector<glm::vec4> paths;      // ax,az,bx,bz — clear corridors through forests
+    int np=3+rng()%3;
+    for(int i=0;i<np;i++) paths.push_back({U(rng),U(rng),U(rng),U(rng)});
+    const float PATH_W=9.f;
+    auto distSeg=[&](float px,float pz,glm::vec4 s)->float{
+        glm::vec2 a{s.x,s.y},b{s.z,s.w},p{px,pz},ab=b-a; float L2=glm::dot(ab,ab);
+        float t=L2>1e-3f?glm::clamp(glm::dot(p-a,ab)/L2,0.f,1.f):0.f;
+        return glm::length(p-(a+ab*t)); };
+    auto rnd=[&](){ return (float)(rng()%10000)/10000.f; };
+    int cap=700, tries=0;
+    while((int)trees.size()<cap && tries<24000){ tries++;
+        float x=U(rng), z=U(rng);
+        // Inside a forest? Denser toward the centre, thinning at the edge, so
+        // forests read as real woods with soft boundaries.
+        float dens=-1.f;
+        for(auto&f:forests){ float d=glm::length(glm::vec2(x-f.x,z-f.z));
+            if(d<f.y){ dens=std::max(dens, 1.f-(d/f.y)); } }
+        if(dens<0.f) continue;                                         // plains stay open
+        if(rnd() > 0.35f + dens*0.65f) continue;                       // density falloff
+        bool onPath=false; for(auto&p:paths) if(distSeg(x,z,p)<PATH_W){ onPath=true; break; }
+        if(onPath) continue;                                           // keep passageways clear
+        if(glm::length(glm::vec2(x,z))<24.f) continue;                 // player start
+        if(glm::length(glm::vec2(x-ebasePos.x,z-ebasePos.z))<30.f) continue; // enemy base
+        bool clash=false;
+        for(auto&nd:nodes) if(glm::length(glm::vec2(x-nd.pos.x,z-nd.pos.z))<5.f){ clash=true; break; }
+        for(auto&t:trees) if(glm::length(glm::vec2(x-t.x,z-t.z))<1.6f){ clash=true; break; } // min spacing
+        if(clash) continue;
+        trees.push_back({x, 1.5f+(rng()%18)/10.f, z}); }
     syncCollision();
     phase=P_MODE; multiplayer=false; dropReady=false; lobbyEnter=true; lobbyNearTable=false;
 }
@@ -331,13 +362,83 @@ void Factory::syncCollision(){
     }
     for(auto&t:trees)   // trunks block the player
         collider->addBox({t.x-0.4f, GROUND, t.z-0.4f},{t.x+0.4f, GROUND+3.f, t.z+0.4f},{0.3f,0.2f,0.1f}, false);
+    if(hubAlive)        // the hub is a solid structure too
+        collider->addBox({hubPos.x-4.f, GROUND, hubPos.z-4.f},{hubPos.x+4.f, GROUND+5.f, hubPos.z+4.f},{0.4f,0.4f,0.5f}, false);
     collider->buildMesh();
+}
+
+// ── LAN plumbing (N-player free-for-all) ───────────────────────────────────
+static const uint16_t IRON_PORT = 49813;
+
+static unsigned randomId(){ std::mt19937 r((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
+                            unsigned v=r(); return v?v:1u; }
+void Factory::netHost(){ if(net.host(IRON_PORT)){ netActive=true; myId=randomId(); } }
+void Factory::netJoin(const char* ip){ if(net.join(ip?ip:"127.0.0.1",IRON_PORT)){ netActive=true; myId=randomId(); } }
+bool Factory::netConnected() const { return net.connected(); }
+std::string Factory::netStatus() const { return net.status(); }
+Factory::Opp* Factory::findOpp(unsigned id){ for(auto&o:opps) if(o.id==id) return &o; return nullptr; }
+
+// Byte helpers (raw little-endian — LAN peers share byte order in practice).
+static void putF(std::vector<uint8_t>& b,float f){ auto* p=(uint8_t*)&f; b.insert(b.end(),p,p+4); }
+static void putU(std::vector<uint8_t>& b,unsigned u){ for(int i=0;i<4;i++) b.push_back((uint8_t)(u>>(i*8))); }
+static float getF(const uint8_t* p){ float f; memcpy(&f,p,4); return f; }
+static unsigned getU(const uint8_t* p){ return (unsigned)p[0]|((unsigned)p[1]<<8)|((unsigned)p[2]<<16)|((unsigned)p[3]<<24); }
+
+void Factory::netTick(float dt){
+    if(!netActive) return;
+    net.poll();
+    // Drain inbound messages. 'S' = a player's snapshot, 'D' = damage to a hub.
+    std::vector<uint8_t> msg;
+    while(net.recv(msg)){
+        if(msg.empty()) continue;
+        if(msg[0]=='S' && msg.size()>=1+4+4+1+8+2){
+            size_t i=1;
+            unsigned id=getU(&msg[i]); i+=4;
+            if(id==myId) continue;                      // ignore echoes of myself
+            float hp=getF(&msg[i]); i+=4;
+            bool alive=msg[i++]!=0;
+            glm::vec3 hub{ getF(&msg[i]),0.f,getF(&msg[i+4]) }; i+=8;
+            unsigned n=(unsigned)(msg[i]|(msg[i+1]<<8)); i+=2;
+            Opp* o=findOpp(id);
+            if(!o){ opps.push_back(Opp{id,hub,hp,alive,{},0.f,gameClock}); o=&opps.back(); everSawOpp=true; }
+            o->hub=hub; o->hp=hp; o->alive=alive; o->lastSeen=gameClock;
+            o->units.clear();
+            for(unsigned k=0;k<n && i+8<=msg.size();k++){ o->units.push_back({getF(&msg[i]),getF(&msg[i+4])}); i+=8; }
+        } else if(msg[0]=='D' && msg.size()>=1+4+4){
+            unsigned target=getU(&msg[1]); float amt=getF(&msg[5]);
+            if(target==myId && hubAlive) hubHp-=amt;    // someone's robots hit my hub
+        }
+    }
+    // Send my snapshot + any damage I dealt this window, ~15 Hz.
+    netSendCd -= dt;
+    if(netSendCd<=0.f && net.connected()){
+        netSendCd = 1.f/15.f;
+        std::vector<uint8_t> s; s.push_back('S');
+        putU(s,myId); putF(s, hubAlive?hubHp:0.f); s.push_back(hubAlive?1:0);
+        putF(s,hubPos.x); putF(s,hubPos.z);
+        std::vector<const Deployable*> rr;
+        for(auto& d:deploys) if(d.kind==DK_ROBOT){ rr.push_back(&d); if(rr.size()>=200) break; }
+        unsigned n=(unsigned)rr.size();
+        s.push_back((uint8_t)(n&0xFF)); s.push_back((uint8_t)(n>>8));
+        for(auto* d:rr){ putF(s,d->pos.x); putF(s,d->pos.z); }
+        net.broadcast(s);
+        for(auto& o:opps) if(o.pendingDmg>0.f){
+            std::vector<uint8_t> dmsg; dmsg.push_back('D'); putU(dmsg,o.id); putF(dmsg,o.pendingDmg);
+            net.broadcast(dmsg); o.pendingDmg=0.f;
+        }
+    }
+    // Win check: outlived everyone (last hub standing).
+    if(!lost && hubAlive && everSawOpp && !won){
+        bool anyAlive=false; for(auto& o:opps) if(o.alive) anyAlive=true;
+        if(!anyAlive){ won=true; Audio::get().play("explosion",0.8f); }
+    }
 }
 
 void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
                      bool placeEdge,bool deleteEdge,bool interactEdge,
                      float* playerHp){
     if(!active) return; (void)now;
+    if(netActive && phase!=P_PLAY) net.poll();   // accept the client / stay live in the front-end
     if(phase==P_LOBBY){          // walkable staging room
         glm::vec3 c=lobbyCenter();
         float dx=camPos.x-c.x, dz=camPos.z-c.z;
@@ -346,6 +447,8 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         return;
     }
     if(phase!=P_PLAY) return;   // frozen ImGui screens (mode / drop)
+    netTick(dt);                // exchange snapshots with the LAN peer
+    if(lost) return;            // defeated — everything freezes
     glm::vec3 g; bool onGround=rayGround(camPos,glm::normalize(camFwd),g);
 
     // Reveal the map around the player (fog-of-war exploration)
@@ -361,9 +464,13 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
     if(onGround){ int pk=pickMachine(g);
         if(pk>=0){ glm::vec2 d{machines[pk].pos.x-camPos.x,machines[pk].pos.z-camPos.z};
             if(glm::length(d)<6.f) aimedMachine=pk; } }
-    // E toggles the recipe popup for the aimed machine (Satisfactory-style)
+    // E near the Hub toggles the top-down tactical view; otherwise E opens the
+    // recipe popup for the aimed machine (Satisfactory-style).
+    bool nearHub = hubAlive && glm::length(glm::vec2(camPos.x-hubPos.x,camPos.z-hubPos.z))<7.f;
     if(interactEdge){
-        if(menuOpen){ menuOpen=false; mapMode=false; menuMachine=-1; }
+        if(cmdMapOpen){ cmdMapOpen=false; }
+        else if(menuOpen){ menuOpen=false; mapMode=false; menuMachine=-1; }
+        else if(nearHub){ cmdMapOpen=true; Audio::get().play("interact",0.6f,1.2f); }
         else if(aimedMachine>=0){ menuOpen=true; mapMode=false; menuMachine=aimedMachine;
             Audio::get().play("interact",0.5f,1.2f); }
     }
@@ -399,11 +506,16 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             bool nodeOk=(selType!=MINER)||nodeAt(g);
             ghostValid=clear&&nodeOk&&std::abs(g.x)<mapHalf&&std::abs(g.z)<mapHalf;
             if(placeEdge && ghostValid){
-                Machine m{}; m.type=selType; m.recipe=0; m.pos=ghostPos; m.yaw=ghostYaw;
-                m.prog=0.f; m.onNode=(selType==MINER)&&nodeAt(ghostPos); m.out=0;
-                for(int i=0;i<ITEM_N;i++) m.in[i]=0;
-                machines.push_back(m); syncCollision();
-                Audio::get().play("melee_hit",0.5f,0.9f);
+                if(selType==HUB){          // the Hub is a special structure, not a machine
+                    hubPos=ghostPos; hubHp=hubMax; hubAlive=true; syncCollision();
+                    Audio::get().play("shift",0.6f,1.1f);
+                } else {
+                    Machine m{}; m.type=selType; m.recipe=0; m.pos=ghostPos; m.yaw=ghostYaw;
+                    m.prog=0.f; m.onNode=(selType==MINER)&&nodeAt(ghostPos); m.out=0;
+                    for(int i=0;i<ITEM_N;i++) m.in[i]=0;
+                    machines.push_back(m); syncCollision();
+                    Audio::get().play("melee_hit",0.5f,0.9f);
+                }
             }
         }
         // Dismantle: delete the aimed machine (or belt) with RMB — but not
@@ -423,16 +535,25 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             if(m.onNode && m.out<CAP){ m.prog+=dt; if(m.prog>=r.time){ m.out+=r.qOut; m.prog=0.f; } }
         } else {
             bool haveIn=(r.inA<0||m.in[r.inA]>=r.qA)&&(r.inB<0||m.in[r.inB]>=r.qB);
-            bool deployable = r.deploy>=0;
-            // deployable recipes need a deploy point; item recipes need out room
-            bool ready = deployable ? (haveIn && m.hasDeploy) : (haveIn && m.out<CAP);
+            bool isFence = (r.deploy==DK_FENCE);       // fences stockpile, laid from the hub
+            bool deployable = r.deploy>=0 && !isFence; // other deployables use the map picker
+            bool ready = isFence     ? (haveIn && fenceBank<80)
+                       : deployable  ? (haveIn && m.hasDeploy)
+                                     : (haveIn && m.out<CAP);
             if(ready){ m.prog+=dt;
                 if(m.prog>=r.time){
                     if(r.inA>=0)m.in[r.inA]-=r.qA; if(r.inB>=0)m.in[r.inB]-=r.qB;
-                    if(deployable){
+                    if(isFence){ fenceBank++; }
+                    else if(deployable){
                         Deployable d{}; d.kind=r.deploy; d.goal=m.deployPt;
                         if(r.deploy==DK_ROBOT){ d.pos=m.pos; d.walking=true; }
-                        else { d.pos=m.deployPt; d.walking=false; }
+                        else if(r.deploy==DK_MINE || r.deploy==DK_TRIPWIRE){
+                            // Lay out a field: fill a grid around the deploy point
+                            const int GW=6; const float SP=3.5f;
+                            int k=m.deployCount; int gx=k%GW, gz=k/GW;
+                            d.pos=m.deployPt + glm::vec3((gx-(GW-1)*0.5f)*SP, 0.f, gz*SP);
+                            d.walking=false; m.deployCount++;
+                        } else { d.pos=m.deployPt; d.walking=false; }
                         d.t=0.f; deploys.push_back(d);
                         Audio::get().play("melee_hit",0.5f,0.7f);
                     } else if(r.out==PART) partsBank+=r.qOut;   // Parts = currency
@@ -453,16 +574,25 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         tracers.push_back({from+glm::vec3(0,1.1f,0),to+glm::vec3(0,1.1f,0),0.09f,friendly});
         Audio::get().play("laser",0.3f,friendly?1.1f:0.7f); };
 
-    auto baseInRange=[&](glm::vec3 p,float range){
-        return ebaseAlive && glm::length(glm::vec2(ebasePos.x-p.x,ebasePos.z-p.z))<range; };
+    // Hostile bases the robots fight: the single AI base offline, or every live
+    // opponent hub in a net free-for-all. opp<0 means the AI enemy base.
+    struct HBase { glm::vec3 pos; int opp; };
+    std::vector<HBase> hbases;
+    if(netActive){ for(size_t k=0;k<opps.size();k++) if(opps[k].alive) hbases.push_back({opps[k].hub,(int)k}); }
+    else if(ebaseAlive) hbases.push_back({ebasePos,-1});
+    auto nearestBase=[&](glm::vec3 p,float range)->int{ int best=-1; float bd=range;
+        for(int i=0;i<(int)hbases.size();i++){ float d=glm::length(glm::vec2(hbases[i].pos.x-p.x,hbases[i].pos.z-p.z));
+            if(d<bd){bd=d;best=i;} } return best; };
+    auto hitBase=[&](int hi,float amt){ if(hbases[hi].opp<0) ebaseHp-=amt; else opps[hbases[hi].opp].pendingDmg+=amt; };
 
     for(size_t di=0;di<deploys.size();di++){ Deployable&d=deploys[di]; d.t+=dt; d.fireCd-=dt;
         if(d.kind==DK_ROBOT){
             // Advance on the ordered point; home on the nearest enemy near it,
-            // or the enemy base if commanded there — but never stop to fight.
+            // or the nearest hostile hub if commanded there — never stop to fight.
             glm::vec3 mt=d.goal; int nearG=nearestEnemy(d.goal,20.f);
+            int nbG = nearG<0 ? nearestBase(d.goal,16.f) : -1;
             if(nearG>=0) mt=enemies[nearG].pos;
-            else if(baseInRange(d.goal,16.f)) mt=ebasePos;
+            else if(nbG>=0) mt=hbases[nbG].pos;
             glm::vec2 to{mt.x-d.pos.x,mt.z-d.pos.z}; float dist=glm::length(to);
             // Formation: separate from nearby friendly robots so they spread
             glm::vec2 sep{0,0};
@@ -476,25 +606,47 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
                 if(glm::length(sep)>0.01f){ d.pos.x+=sep.x*ROBOT_SPD*0.5f*dt; d.pos.z+=sep.y*ROBOT_SPD*0.5f*dt; } }
             int t=nearestEnemy(d.pos,R_RANGE);   // shoot on the move
             if(t>=0 && d.fireCd<=0.f){ enemies[t].hp-=13.f; d.fireCd=0.65f; shoot(d.pos,enemies[t].pos,true); }
-            else if(t<0 && baseInRange(d.pos,R_RANGE) && d.fireCd<=0.f){ ebaseHp-=13.f; d.fireCd=0.65f; shoot(d.pos,ebasePos,true); }
+            else if(t<0 && d.fireCd<=0.f){ int hb=nearestBase(d.pos,R_RANGE);
+                if(hb>=0){ hitBase(hb,13.f); d.fireCd=0.65f; shoot(d.pos,hbases[hb].pos,true); } }
         } else if(d.kind==DK_TURRET){
             int t=nearestEnemy(d.pos,T_RANGE);
             if(t>=0 && d.fireCd<=0.f){ enemies[t].hp-=16.f; d.fireCd=0.45f; shoot(d.pos,enemies[t].pos,true); }
         } else if(d.kind==DK_MINE){
-            int t=nearestEnemy(d.pos,2.6f);
-            if(t>=0){ for(auto&e:enemies) if(glm::length(glm::vec2(e.pos.x-d.pos.x,e.pos.z-d.pos.z))<4.5f) e.hp-=70.f;
-                Audio::get().play("explosion",0.6f); d.hp=-1.f; }   // consumed
+            int t=nearestEnemy(d.pos,3.2f);            // tripped when a robot steps near
+            if(t>=0){ for(auto&e:enemies) if(glm::length(glm::vec2(e.pos.x-d.pos.x,e.pos.z-d.pos.z))<5.f) e.hp-=90.f;
+                Audio::get().play("explosion",0.7f); d.hp=-1.f; }   // blows up + consumed
         } else if(d.kind==DK_TRIPWIRE){
             int t=nearestEnemy(d.pos,1.8f);
             if(t>=0){ enemies[t].hp-=30.f; Audio::get().play("crash",0.4f,1.4f); d.hp=-1.f; }
         }
     }
 
-    // Enemies: hunt the player first, then units, then buildings.
-    glm::vec3 base = machines.empty()? glm::vec3(0):machines[0].pos;
+    // Hard collisions so robots hold a real formation instead of overlapping:
+    // push apart any two robots that occupy the same space, then push them out
+    // of trees and buildings.
+    const float R_RAD=0.65f;
+    for(int iter=0; iter<2; iter++)
+      for(size_t i=0;i<deploys.size();i++){ if(deploys[i].kind!=DK_ROBOT) continue;
+        for(size_t j=i+1;j<deploys.size();j++){ if(deploys[j].kind!=DK_ROBOT) continue;
+            glm::vec2 a{deploys[i].pos.x,deploys[i].pos.z}, b{deploys[j].pos.x,deploys[j].pos.z};
+            glm::vec2 d=a-b; float dd=glm::length(d); float minD=R_RAD*2.f;
+            if(dd<minD && dd>1e-3f){ glm::vec2 push=(d/dd)*((minD-dd)*0.5f);
+                deploys[i].pos.x+=push.x; deploys[i].pos.z+=push.y;
+                deploys[j].pos.x-=push.x; deploys[j].pos.z-=push.y; } } }
+    for(auto&d:deploys){ if(d.kind!=DK_ROBOT) continue;
+        for(auto&t:trees){ glm::vec2 aw{d.pos.x-t.x,d.pos.z-t.z}; float dd=glm::length(aw);
+            float minD=t.y+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } }
+        for(auto&m:machines){ glm::vec3 h=footprint(m.type);
+            glm::vec2 aw{d.pos.x-m.pos.x,d.pos.z-m.pos.z}; float dd=glm::length(aw);
+            float minD=std::max(h.x,h.z)+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } } }
+
+    // Enemies march on the Hub (their objective), hitting the player, units,
+    // and buildings that get in the way.
+    glm::vec3 base = hubAlive ? hubPos : (machines.empty()? glm::vec3(0):machines[0].pos);
     glm::vec3 pfeet{camPos.x,0.f,camPos.z};
     for(auto&e:enemies){ e.fireCd-=dt;
         float pd = glm::length(glm::vec2(pfeet.x-e.pos.x,pfeet.z-e.pos.z));
+        float hd = hubAlive? glm::length(glm::vec2(hubPos.x-e.pos.x,hubPos.z-e.pos.z)) : 1e9f;
         int bestD=-1; float bd=24.f;
         for(int i=0;i<(int)deploys.size();i++){ if(deploys[i].kind!=DK_ROBOT&&deploys[i].kind!=DK_TURRET) continue;
             float dd=glm::length(glm::vec2(deploys[i].pos.x-e.pos.x,deploys[i].pos.z-e.pos.z)); if(dd<bd){bd=dd;bestD=i;} }
@@ -513,9 +665,13 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             if(tgt==0 && pd<11.f && playerHp){ *playerHp-=8.f; e.fireCd=0.9f; shoot(e.pos,pfeet+glm::vec3(0,0.6f,0),false); }
             else if(tgt==1 && bd<11.f){ deploys[bestD].hp-=10.f; e.fireCd=0.9f; shoot(e.pos,deploys[bestD].pos,false); }
             else if(tgt==2 && bm<9.f){ machines[bestM].hp-=8.f; e.fireCd=1.0f; shoot(e.pos,machines[bestM].pos,false); }
+            else if(hubAlive && hd<10.f){ hubHp-=9.f; e.fireCd=1.0f; shoot(e.pos,hubPos+glm::vec3(0,2.f,0),false); }
         }
     }
-    if(playerHp && *playerHp<=0.f && !won) lost=true;   // player dead = defeat
+    if(playerHp){ if(*playerHp<0.f) *playerHp=0.f;         // never negative
+        if(*playerHp<=0.f && !won) lost=true; }            // player dead = defeat
+    if(hubAlive && hubHp<=0.f){ hubAlive=false; if(!won) lost=true;   // hub destroyed = defeat
+        Audio::get().play("explosion",0.9f); }
 
     // Remove the dead and used-up; decay tracers
     for(int i=(int)enemies.size()-1;i>=0;i--) if(enemies[i].hp<=0.f){ enemies.erase(enemies.begin()+i);
@@ -533,7 +689,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
     // "economy" grows, sending larger, more frequent waves the longer the
     // match runs. (A networked opponent would replace this with real orders.)
     gameClock += dt;
-    if(ebaseAlive && gameClock >= peaceTime){
+    if(!netActive && ebaseAlive && gameClock >= peaceTime){   // real peer replaces the AI in net matches
         aiEconomy += dt;
         enemySpawnCd -= dt;
         float interval = std::max(6.f, 16.f - aiEconomy*0.05f);   // ramps up
@@ -658,6 +814,11 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
                 break;
         }
     }
+    // Your Hub (wizard-purple keep) — lose it and the match is over
+    if(hubAlive){ glm::vec3 b=hubPos+glm::vec3(0,GROUND,0); float f=hubHp/hubMax;
+        cube(VP,b+glm::vec3(0,2.0f,0),{4.0f,2.0f,4.0f},{0.42f,0.34f,0.62f},sun,fog,cam,1.f,texMetal,{4,3});
+        cube(VP,b+glm::vec3(0,4.2f,0),{2.4f,0.9f,2.4f},{0.55f,0.42f,0.8f},sun,fog,cam,1.f,texMetal,{2,2});
+        cube(VP,b+glm::vec3(0,5.6f,0),{0.6f,0.8f,0.6f},{0.5f*f+0.4f,0.9f,1.0f},sun,fog,cam,1.f,texMetal,{1,1}); } // beacon dims as it takes damage
     // Enemy base (large red fortress) — the objective
     if(ebaseAlive){ glm::vec3 b=ebasePos+glm::vec3(0,GROUND,0);
         cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
@@ -667,6 +828,16 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
     for(auto&e:enemies){ glm::vec3 b=e.pos+glm::vec3(0,GROUND,0);
         cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.85f,0.3f,0.28f},sun,fog,cam,1.f,texMetal,{1,1});
         cube(VP,b+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.5f,0.4f},sun,fog,cam,1.f,texMetal,{1,1}); }
+    // Opponents (net free-for-all): each rival hub is a red fortress, their
+    // robots stream in as crimson contacts.
+    for(auto& o:opps){ if(!o.alive) continue;
+        glm::vec3 b=o.hub+glm::vec3(0,GROUND,0);
+        cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
+        cube(VP,b+glm::vec3(0,3.8f,0),{2.2f,0.9f,2.2f},{0.7f,0.25f,0.22f},sun,fog,cam,1.f,texMetal,{2,2});
+        cube(VP,b+glm::vec3(0,5.1f,0),{0.5f,0.6f,0.5f},{1.f,0.35f,0.25f},sun,fog,cam,1.f,texMetal,{1,1});
+        for(auto&u:o.units){ glm::vec3 p={u.x,GROUND,u.y};
+            cube(VP,p+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.9f,0.15f,0.35f},sun,fog,cam,1.f,texMetal,{1,1});
+            cube(VP,p+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.4f,0.6f},sun,fog,cam,1.f,texMetal,{1,1}); } }
     // Shot tracers (thin stretched box, colour by side)
     for(auto&tr:tracers){ glm::vec3 d=tr.b-tr.a; float len=glm::length(d); if(len<0.1f) continue;
         glm::vec3 mid=(tr.a+tr.b)*0.5f; float ang=std::atan2(-d.z,d.x);
@@ -741,10 +912,24 @@ void Factory::renderHud(int winW,int winH){
             ImGui::TextColored({0.7f,0.85f,1.f,1.f},"Factory Wizards — choose a mode");
             ImGui::Separator();
             if(ImGui::Button("OFFLINE  (skirmish vs AI)",{ImGui::GetContentRegionAvail().x,40})){
-                multiplayer=false; phase=P_LOBBY; lobbyEnter=true; }
-            if(ImGui::Button("MULTIPLAYER  (local preview)",{ImGui::GetContentRegionAvail().x,40})){
-                multiplayer=true; phase=P_LOBBY; lobbyEnter=true; }
-            ImGui::TextDisabled("Multiplayer networking is groundwork only — runs a local match for now.");
+                multiplayer=false; netActive=false; phase=P_LOBBY; lobbyEnter=true; }
+            ImGui::Dummy({0,6}); ImGui::Separator();
+            ImGui::TextColored({0.8f,1.f,0.85f,1.f},"LAN Free-for-all");
+            if(!netActive){
+                if(ImGui::Button("HOST a match",{ImGui::GetContentRegionAvail().x,34})){
+                    netHost(); multiplayer=true; }
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x-96);
+                ImGui::InputText("##ip",joinIp,sizeof(joinIp)); ImGui::SameLine();
+                if(ImGui::Button("JOIN",{88,0})){ netJoin(joinIp); multiplayer=true; }
+                ImGui::TextDisabled("Host, then tell everyone your LAN IP. Any number of players. Port %u.", (unsigned)IRON_PORT);
+            } else {
+                ImGui::TextColored({0.6f,1.f,0.7f,1.f},"%s%s", net.isHost()?"Hosting — ":"Connected — ", netStatus().c_str());
+                ImGui::TextDisabled("Others can still join while you play. Last hub standing wins.");
+                if(ImGui::Button("ENTER LOBBY",{ImGui::GetContentRegionAvail().x,40})){
+                    multiplayer=true; phase=P_LOBBY; lobbyEnter=true; }
+                if(ImGui::Button("Cancel / disconnect",{ImGui::GetContentRegionAvail().x,0})){
+                    net.close(); netActive=false; multiplayer=false; }
+            }
             ImGui::End();
         } else if(phase==P_DROP){
             float MS=440.f; ImGui::SetNextWindowSize({MS+30,MS+90});
@@ -765,7 +950,7 @@ void Factory::renderHud(int winW,int winH){
                 float wx=((mp.x-o.x)/MS)*2*mapHalf-mapHalf, wz=((mp.y-o.y)/MS)*2*mapHalf-mapHalf;
                 float dEnemy=glm::length(glm::vec2(wx-ebasePos.x,wz-ebasePos.z));
                 if(dEnemy>60.f){ dropPos={wx,GROUND,wz}; dropReady=true; phase=P_PLAY;
-                    Audio::get().play("shift",0.6f); }
+                    Audio::get().play("shift",0.6f); }   // hub is placed by the player
                 else Audio::get().play("crash",0.4f,0.7f);   // too close to enemy
             }
             if(ImGui::Button("Back")){ phase=P_LOBBY; lobbyEnter=true; }
@@ -816,7 +1001,7 @@ void Factory::renderHud(int winW,int winH){
                     // charge Parts for a miner upgrade (downgrades are free)
                     if(m.type==MINER && i>m.recipe && partsBank<MINER_COST[i]){
                         Audio::get().play("crash",0.4f,0.7f);   // not enough Parts
-                    } else if(r.deploy>=0){ pendingRecipe=i; mapMode=true; }   // → map
+                    } else if(r.deploy>=0 && r.deploy!=DK_FENCE){ pendingRecipe=i; mapMode=true; }   // → map (fences stockpile instead)
                     else {
                         if(m.type==MINER && i>m.recipe) partsBank-=MINER_COST[i];
                         m.recipe=i; m.prog=0.f; m.out=0;
@@ -865,6 +1050,9 @@ void Factory::renderHud(int winW,int winH){
             if(ebaseAlive){ ImVec2 p=w2m(ebasePos.x,ebasePos.z);
                 d->AddRectFilled({p.x-6,p.y-6},{p.x+6,p.y+6},IM_COL32(230,60,50,255));
                 d->AddText({p.x-14,p.y+7},IM_COL32(255,150,140,255),"BASE"); }
+            for(auto&o:opps) if(o.alive){ ImVec2 p=w2m(o.hub.x,o.hub.z);
+                d->AddRectFilled({p.x-6,p.y-6},{p.x+6,p.y+6},IM_COL32(230,60,50,255));
+                for(auto&u:o.units){ ImVec2 q=w2m(u.x,u.y); d->AddCircleFilled(q,1.6f,IM_COL32(240,90,120,255)); } }
             // player marker (camPos passed via ghostPos hack — use last aim)
             d->AddRect(o,{o.x+MS,o.y+MS},IM_COL32(90,110,120,255));
             // click handling
@@ -874,7 +1062,7 @@ void Factory::renderHud(int winW,int winH){
                 float wx=((mp.x-o.x)/MS)*2*mapHalf-mapHalf;
                 float wz=((mp.y-o.y)/MS)*2*mapHalf-mapHalf;
                 int c=cellOf(wx,wz);
-                if(c>=0 && explored[c]){
+                if(c>=0){   // robots can be ordered into unexplored ground too
                     glm::vec3 tgt{std::round(wx/GRID)*GRID,0.f,std::round(wz/GRID)*GRID};
                     if(isTerminal){
                         // Release every robot stored in barracks (they spawn at
@@ -903,6 +1091,62 @@ void Factory::renderHud(int winW,int winH){
         }
     }
 
+    // ── Hub command map: click to march robots, DRAG to lay a fence wall ───
+    if(cmdMapOpen){
+        ImGui::SetNextWindowPos({winW*0.5f,winH*0.5f},ImGuiCond_Always,{0.5f,0.5f});
+        float MS=460.f; ImGui::SetNextWindowSize({MS+30,MS+96});
+        ImGui::Begin("HUB COMMAND",nullptr,ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoMove);
+        ImGui::TextColored({0.6f,0.9f,1.f,1.f},"Click: march robots    Drag: lay Fence wall (%d in stock)",fenceBank);
+        ImVec2 o=ImGui::GetCursorScreenPos(); ImDrawList* d=ImGui::GetWindowDrawList();
+        auto w2m=[&](float wx,float wz){ return ImVec2(o.x+(wx+mapHalf)/(2*mapHalf)*MS,o.y+(wz+mapHalf)/(2*mapHalf)*MS); };
+        auto m2w=[&](ImVec2 p){ return glm::vec2(((p.x-o.x)/MS)*2*mapHalf-mapHalf,((p.y-o.y)/MS)*2*mapHalf-mapHalf); };
+        d->AddRectFilled(o,{o.x+MS,o.y+MS},IM_COL32(20,26,22,255));
+        float cs=MS/gridN;
+        for(int cz=0;cz<gridN;cz++)for(int cx=0;cx<gridN;cx++) if(explored[cz*gridN+cx]){
+            ImVec2 a{o.x+cx*cs,o.y+cz*cs}; d->AddRectFilled(a,{a.x+cs+1,a.y+cs+1},IM_COL32(38,54,42,255)); }
+        for(auto&n:nodes){ ImVec2 p=w2m(n.pos.x,n.pos.z); d->AddCircleFilled(p,2.f,IM_COL32(60,200,190,220)); }
+        for(auto&t:trees){ ImVec2 p=w2m(t.x,t.z); d->AddCircleFilled(p,1.f,IM_COL32(40,90,40,200)); }
+        for(auto&mm:machines){ ImVec2 p=w2m(mm.pos.x,mm.pos.z); d->AddRectFilled({p.x-3,p.y-3},{p.x+3,p.y+3},IM_COL32(150,170,255,255)); }
+        for(auto&dp:deploys){ ImVec2 p=w2m(dp.pos.x,dp.pos.z);
+            d->AddCircleFilled(p,2.f, dp.kind==DK_ROBOT?IM_COL32(120,200,255,255):IM_COL32(230,180,80,255)); }
+        for(auto&en:enemies){ ImVec2 p=w2m(en.pos.x,en.pos.z); d->AddCircleFilled(p,2.f,IM_COL32(240,70,60,255)); }
+        if(hubAlive){ ImVec2 p=w2m(hubPos.x,hubPos.z); d->AddRectFilled({p.x-5,p.y-5},{p.x+5,p.y+5},IM_COL32(170,130,240,255)); }
+        if(ebaseAlive){ ImVec2 p=w2m(ebasePos.x,ebasePos.z); d->AddRectFilled({p.x-6,p.y-6},{p.x+6,p.y+6},IM_COL32(230,60,50,255));
+            d->AddText({p.x-14,p.y+7},IM_COL32(255,150,140,255),"ENEMY"); }
+        for(auto&o:opps) if(o.alive){ ImVec2 p=w2m(o.hub.x,o.hub.z); d->AddRectFilled({p.x-6,p.y-6},{p.x+6,p.y+6},IM_COL32(230,60,50,255));
+            d->AddText({p.x-16,p.y+7},IM_COL32(255,150,140,255),"RIVAL");
+            for(auto&u:o.units){ ImVec2 q=w2m(u.x,u.y); d->AddCircleFilled(q,1.6f,IM_COL32(240,90,120,255)); } }
+        d->AddRect(o,{o.x+MS,o.y+MS},IM_COL32(90,120,100,255));
+
+        ImGui::InvisibleButton("hubmap",{MS,MS});
+        static bool dragging=false; static ImVec2 dragStart;
+        if(ImGui::IsItemActivated()){ dragging=true; dragStart=ImGui::GetIO().MousePos; }
+        if(dragging){ ImVec2 cur=ImGui::GetIO().MousePos;   // live drag preview
+            d->AddLine(dragStart,cur,IM_COL32(200,220,120,220),3.f); }
+        if(dragging && ImGui::IsItemDeactivated()){
+            dragging=false; ImVec2 end=ImGui::GetIO().MousePos;
+            float dx=end.x-dragStart.x, dy=end.y-dragStart.y; float dpix=std::sqrt(dx*dx+dy*dy);
+            glm::vec2 A=m2w(dragStart), B=m2w(end);
+            if(dpix<8.f){   // a click → march every robot here
+                glm::vec3 tgt{std::round(B.x/GRID)*GRID,0.f,std::round(B.y/GRID)*GRID};
+                for(auto&bar:machines) if(bar.type==BARRACKS)
+                    while(bar.in[ROBOT_ITEM]>0){ bar.in[ROBOT_ITEM]--; Deployable rb{}; rb.kind=DK_ROBOT; rb.pos=bar.pos; rb.goal=tgt; rb.walking=true; deploys.push_back(rb); }
+                for(auto&d2:deploys) if(d2.kind==DK_ROBOT){ d2.goal=tgt; d2.walking=true; }
+                Audio::get().play("interact",0.6f,1.3f);
+            } else {        // a drag → lay a wall of fences from stock
+                float wlen=glm::length(B-A); int count=(int)(wlen/4.f)+1;
+                glm::vec2 step=(count>1)?(B-A)/(float)(count-1):glm::vec2(0);
+                int placed=0;
+                for(int i=0;i<count && fenceBank>0;i++){ glm::vec2 p=A+step*(float)i;
+                    Deployable f{}; f.kind=DK_FENCE; f.pos={p.x,0.f,p.y}; f.walking=false; deploys.push_back(f);
+                    fenceBank--; placed++; }
+                if(placed) Audio::get().play("melee_hit",0.5f,0.8f);
+            }
+        }
+        if(ImGui::Button("Close")) cmdMapOpen=false;
+        ImGui::End();
+    }
+
     ImDrawList* dl=ImGui::GetForegroundDrawList();
     int inv[ITEM_N]; totals(inv);
     float y=16.f; dl->AddText({18,y}, IM_COL32(210,230,235,255), "THROUGHPUT"); y+=20;
@@ -928,13 +1172,32 @@ void Factory::renderHud(int winW,int winH){
             ImVec2 cs=ImGui::CalcTextSize(c);
             dl->AddText({winW*0.5f-cs.x*0.5f,by2+32}, IM_COL32(150,220,160,230), c); }
     }
+    // Net free-for-all banner: rivals still standing
+    if(netActive){ int alive=0; for(auto&o:opps) if(o.alive) alive++;
+        char c[64]; snprintf(c,sizeof(c), net.connected()? "FREE-FOR-ALL — %d rival(s) standing" : "waiting for players…", alive);
+        ImVec2 cs=ImGui::CalcTextSize(c);
+        dl->AddText({winW*0.5f-cs.x*0.5f, 16.f}, IM_COL32(255,180,120,235), c);
+    }
+    // Your Hub health (top-left, under the stockpile)
+    if(hubAlive){ float f=hubHp/hubMax; if(f<0)f=0;
+        float hx=18.f, hy=(float)(y+26);
+        dl->AddText({hx,hy-2}, IM_COL32(180,160,255,255), "HUB");
+        dl->AddRectFilled({hx+40,hy},{hx+240,hy+12}, IM_COL32(0,0,0,160),3.f);
+        dl->AddRectFilled({hx+40,hy},{hx+40+200*f,hy+12}, IM_COL32(140,110,230,240),3.f);
+        dl->AddText({hx,hy+16}, IM_COL32(120,140,170,200), "[E] at the Hub = top-down view"); }
     if(won){ const char* t="ENEMY BASE DESTROYED — VICTORY";
         ImVec2 ts=ImGui::CalcTextSize(t);
         dl->AddText({winW*0.5f-ts.x*0.5f,winH*0.35f}, IM_COL32(120,255,150,255), t); }
-    if(lost){ const char* t="YOU DIED — DEFEAT";
+    if(lost){
+        dl->AddRectFilled({0,0},{(float)winW,(float)winH}, IM_COL32(30,0,0,120));   // red vignette
+        const char* t="YOU DIED — DEFEAT";
         ImVec2 ts=ImGui::CalcTextSize(t);
-        dl->AddRectFilled({winW*0.5f-ts.x*0.5f-14,winH*0.35f-6},{winW*0.5f+ts.x*0.5f+14,winH*0.35f+20},IM_COL32(40,0,0,200),4.f);
-        dl->AddText({winW*0.5f-ts.x*0.5f,winH*0.35f}, IM_COL32(255,90,80,255), t); }
+        dl->AddRectFilled({winW*0.5f-ts.x*0.5f-16,winH*0.4f-8},{winW*0.5f+ts.x*0.5f+16,winH*0.4f+22},IM_COL32(50,0,0,220),4.f);
+        dl->AddText({winW*0.5f-ts.x*0.5f,winH*0.4f}, IM_COL32(255,90,80,255), t);
+        const char* r="Press ENTER to play again";
+        ImVec2 rs=ImGui::CalcTextSize(r);
+        dl->AddText({winW*0.5f-rs.x*0.5f,winH*0.4f+34}, IM_COL32(210,200,200,230), r);
+    }
 
     // Deploy-targeting banner
     if(deployTarget>=0){

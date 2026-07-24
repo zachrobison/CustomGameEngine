@@ -11,7 +11,7 @@
 #include "../platform/KeyBinds.h"
 #include "../game/GameConfig.h"
 #define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl3.h>
+#include "../gl_compat.h"
 #include <GLFW/glfw3.h>
 #include "../vendor/stb_image.h"
 #include <cstdio>

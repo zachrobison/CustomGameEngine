@@ -1,8 +1,10 @@
 #pragma once
 #define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl3.h>
+#include "../gl_compat.h"
+#include "../net/Net.h"
 #include <glm/glm.hpp>
 #include <vector>
+#include <string>
 
 class Props;
 
@@ -23,7 +25,24 @@ public:
     // Frozen ImGui screens (mode / drop map). The LOBBY is walkable, so it's
     // NOT a "menu phase" — you move around in it like the battlefield.
     bool  inMenuPhase() const { return phase == P_MODE || phase == P_DROP; }
+    bool  defeated() const { return lost; }
+    bool  victorious() const { return won; }
     bool  multiplayer = false;
+
+    // ── LAN (increment 2): host/join over TCP, then a light snapshot exchange.
+    // In a networked match the peer's hub stands in as the enemy base you fight,
+    // and each side's robots are streamed to the other as red contacts.
+    void        netHost();                 // listen on the LAN port
+    void        netJoin(const char* ip);   // connect to a host by IP
+    bool        netConnected() const;
+    bool        netActive = false;         // a networked match is running
+    std::string netStatus() const;
+    char        joinIp[40] = "192.168.1.";  // editable in the mode screen
+
+    // Your Hub — the base the enemy tries to destroy (lose it = defeat). Also
+    // opens the top-down command map (like the Terminal) when you interact.
+    glm::vec3 hubPosition() const { return hubPos; }
+    bool  commandMapOpen() const { return cmdMapOpen; }
     // Set when the player picks a drop point; main reads it to place the player.
     bool  dropReady = false;
     glm::vec3 dropPos{0.f};
@@ -53,7 +72,7 @@ public:
 
     enum Item  { ORE, INGOT, SCREW, PLATE, ROD, PART, ROBOT_ITEM, ITEM_N };
     enum Tool  { MINER, SMELTER, CONSTRUCTOR, ASSEMBLER, BARRACKS, TERMINAL,
-                 CONVEYOR, TOOL_N };
+                 HUB, CONVEYOR, TOOL_N };
     static const int MTYPE_N = CONVEYOR;   // machine types (excludes conveyor)
     enum DKind { DK_ROBOT, DK_MINE, DK_FENCE, DK_TRIPWIRE, DK_TURRET };
 
@@ -72,6 +91,7 @@ private:
         float hp = 120.f;              // structures take enemy fire
         glm::vec3 deployPt{0.f};        // where deployables go
         bool  hasDeploy = false;
+        int   deployCount = 0;         // # deployed (for minefield grid layout)
     };
     // Belt path: machines[from] → pts[0] → … → machines[to]. Corners are the
     // waypoints in pts (grid-snapped). prog values are 0..1 over the whole path.
@@ -103,6 +123,24 @@ private:
     float gameClock = 0.f;
     bool  won = false, lost = false;
     int   partsBank = 0;           // Parts = currency for upgrades
+    int   fenceBank = 0;           // Fences stockpiled in machines, laid from the hub map
+    // Player hub (home base) — placed at the drop point
+    glm::vec3 hubPos{0.f};
+    float hubHp = 0.f, hubMax = 1400.f;
+    bool  hubAlive = false;
+    bool  cmdMapOpen = false;      // hub-opened top-down command map
+
+    // ── Net mirror: every other player, keyed by a random id. Each opponent's
+    // hub is a hostile base you fight; their robots stream in as red contacts.
+    struct Opp { unsigned id; glm::vec3 hub; float hp; bool alive;
+                 std::vector<glm::vec2> units; float pendingDmg; float lastSeen; };
+    Net   net;
+    unsigned myId = 0;             // this player's random id (set on host/join)
+    float netSendCd = 0.f;         // throttle snapshots to ~15 Hz
+    std::vector<Opp> opps;
+    bool  everSawOpp = false;      // for the "last hub standing" win check
+    void  netTick(float dt);
+    Opp*  findOpp(unsigned id);
     int   menuMachine  = -1;            // machine whose menu is open
     int   deployTarget = -1;            // (legacy) machine awaiting a 3D click
     bool  mapMode = false;             // menu is showing the deploy map
@@ -123,7 +161,7 @@ private:
     int   aimedMachine = -1;   // machine under the crosshair, in reach
     const float GROUND = 20.f;
     const float GRID   = 2.f;
-    float mapHalf = 260.f;   // ~10x the original area
+    float mapHalf = 370.f;   // 2x bigger again (~10x the original was 260)
 
     GLuint vao = 0, vbo = 0, prog = 0;
     GLuint texFloor = 0, texMetal = 0, texBelt = 0;
