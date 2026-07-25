@@ -925,13 +925,18 @@ int main(int argc, char** argv) {
                 ui.scenePanel.getFirstLevelSettings(worldSettings);
             if (!ctx.statusMsg.empty()) ui.statusMsg = ctx.statusMsg;
 
-            // Iron Command: death is a match loss (handled by the factory HUD),
-            // so don't respawn there — everywhere else, respawn.
-            if (player.health <= 0.f && !gameCfg.factory) {
-                player.health          = player.maxHealth;
-                player.camera.position = {0.5f, startH, 0.5f};
-                player.velocity        = {0, 0, 0};
-                ui.statusMsg = "You died — respawned.";
+            // Respawn on death. In Iron Command you respawn at your hub (only
+            // losing the hub ends the match); elsewhere, at the origin.
+            if (player.health <= 0.f) {
+                player.health   = player.maxHealth;
+                player.velocity = {0, 0, 0};
+                if (gameCfg.factory && !factory.defeated()) {
+                    glm::vec3 h = factory.hubPosition();
+                    player.camera.position = { h.x + 7.f, 21.65f, h.z };  // beside the hub
+                } else if (!gameCfg.factory) {
+                    player.camera.position = {0.5f, startH, 0.5f};
+                }
+                ui.statusMsg = "You were downed — respawned at your hub.";
                 Audio::get().play("death", 0.8f);
             }
 

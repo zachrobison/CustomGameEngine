@@ -724,10 +724,9 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             else if(hubAlive && hd<10.f){ hubHp-=9.f; e.fireCd=1.0f; shoot(e.pos,hubPos+glm::vec3(0,2.f,0),false); }
         }
     }
-    // The player is a commander, not the objective: they slowly regenerate and
-    // never "die" — only your HUB being destroyed knocks you out of the match.
-    if(playerHp){ if(*playerHp<100.f) *playerHp += 7.f*dt;
-        if(*playerHp>100.f)*playerHp=100.f; if(*playerHp<0.f)*playerHp=0.f; }
+    // The player can be downed but isn't the objective: main respawns them at
+    // the hub when health hits 0. Only your HUB being destroyed loses the match.
+    if(playerHp && *playerHp<0.f) *playerHp=0.f;
     if(hubAlive && hubHp<=0.f){ hubAlive=false; if(!won) lost=true;   // your hub gone = you're out
         Audio::get().play("explosion",0.9f); }
 
