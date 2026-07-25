@@ -731,8 +731,9 @@ int main(int argc, char** argv) {
             bool lmbEdge = lmb && !lmbPrev, rmbEdge = rmb && !rmbPrev;
             bool interactEdge = eNow && !ePrev;
             lmbPrev = lmb; rmbPrev = rmb; ePrev = eNow;
-            // Build tool / menu / targeting all take over LMB (no weapon fire)
-            player.suppressFire = factory.buildMode || factory.menuOpen || factory.targeting() || factory.commandMapOpen();
+            // The engine weapon is suppressed in Iron Command — the pistol is
+            // handled by factory.playerFire so it can damage factory targets.
+            player.suppressFire = true;
             // Menu releases the cursor so you can click recipe buttons
             // Front-end menus (mode/lobby/drop) + hub command map release the cursor too
             glfwSetInputMode(window, GLFW_CURSOR,
@@ -744,6 +745,10 @@ int main(int argc, char** argv) {
             bool deleteEdge = factory.buildMode && rmbEdge;
             factory.update(dt, now, player.camera.position, player.camera.forward(),
                            factoryPlace, deleteEdge, interactEdge, &player.health);
+            // Pistol: LMB in play fires a hitscan that damages enemies / rival hubs.
+            if (factory.phase == Factory::P_PLAY && lmbEdge &&
+                !factory.buildMode && !factory.menuOpen && !factory.commandMapOpen())
+                factory.playerFire(player.camera.position, player.camera.forward());
             // Player picked a drop point → teleport them there and reveal
             if (factory.dropReady) {
                 player.camera.position = { factory.dropPos.x, 21.65f, factory.dropPos.z };
@@ -1148,6 +1153,13 @@ int main(int argc, char** argv) {
                 enemyModel.render(proj * view, e.position, e.facingY, 1.f,
                                   sunDir, worldSettings.fog_density,
                                   player.camera.position, tint);
+            }
+            // Other players' avatars in a LAN match (bluish so rivals read clearly).
+            if (gameCfg.factory && factory.active) {
+                for (auto& pv : factory.peerAvatars())
+                    enemyModel.render(proj * view, pv.pos, pv.yaw, 1.f,
+                                      sunDir, worldSettings.fog_density,
+                                      player.camera.position, glm::vec3(0.55f, 0.8f, 1.7f));
             }
         }
 

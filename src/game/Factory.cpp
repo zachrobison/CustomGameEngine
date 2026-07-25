@@ -249,7 +249,7 @@ void Factory::reset(unsigned seed){
     ebaseHp=ebaseMax; ebaseAlive=!netActive; won=false; lost=false;  // net: real players replace the AI base
     aiEconomy=0.f; gameClock=0.f; enemySpawnCd=6.f;
     opps.clear(); everSawOpp=false; netSendCd=0.f;
-    hubAlive=false; cmdMapOpen=false; fenceBank=0; // hub is placed on drop
+    hubAlive=false; cmdMapOpen=false; fenceBank=0; mineBank=0; turretBank=0; hubBrush=0; // hub is placed on drop
     active=true; buildMode=false; selType=0; ghostYaw=0.f; pendingSrc=-1; aimedMachine=-1;
     beltPts.clear();
     menuOpen=false; mapMode=false; pendingRecipe=-1; menuMachine=-1; deployTarget=-1;
@@ -364,6 +364,8 @@ void Factory::syncCollision(){
         collider->addBox({t.x-0.4f, GROUND, t.z-0.4f},{t.x+0.4f, GROUND+3.f, t.z+0.4f},{0.3f,0.2f,0.1f}, false);
     if(hubAlive)        // the hub is a solid structure too
         collider->addBox({hubPos.x-4.f, GROUND, hubPos.z-4.f},{hubPos.x+4.f, GROUND+5.f, hubPos.z+4.f},{0.4f,0.4f,0.5f}, false);
+    for(auto&d:deploys) if(d.kind==DK_FENCE)   // fence walls block the player as well
+        collider->addBox({d.pos.x-1.3f, GROUND, d.pos.z-0.35f},{d.pos.x+1.3f, GROUND+2.2f, d.pos.z+0.35f},{0.35f,0.37f,0.4f}, false);
     collider->buildMesh();
 }
 
@@ -404,6 +406,8 @@ void Factory::netTick(float dt){
             o->hub=hub; o->hp=hp; o->alive=alive; o->lastSeen=gameClock;
             o->units.clear();
             for(unsigned k=0;k<n && i+8<=msg.size();k++){ o->units.push_back({getF(&msg[i]),getF(&msg[i+4])}); i+=8; }
+            // trailing avatar: x, z, yaw (their player character)
+            if(i+12<=msg.size()){ o->avatarPos={getF(&msg[i]),GROUND,getF(&msg[i+4])}; o->avatarYaw=getF(&msg[i+8]); i+=12; }
         } else if(msg[0]=='D' && msg.size()>=1+4+4){
             unsigned target=getU(&msg[1]); float amt=getF(&msg[5]);
             if(target==myId && hubAlive) hubHp-=amt;    // someone's robots hit my hub
@@ -421,6 +425,7 @@ void Factory::netTick(float dt){
         unsigned n=(unsigned)rr.size();
         s.push_back((uint8_t)(n&0xFF)); s.push_back((uint8_t)(n>>8));
         for(auto* d:rr){ putF(s,d->pos.x); putF(s,d->pos.z); }
+        putF(s,playerCam.x); putF(s,playerCam.z); putF(s,playerYaw);   // my avatar
         net.broadcast(s);
         for(auto& o:opps) if(o.pendingDmg>0.f){
             std::vector<uint8_t> dmsg; dmsg.push_back('D'); putU(dmsg,o.id); putF(dmsg,o.pendingDmg);
@@ -432,6 +437,39 @@ void Factory::netTick(float dt){
         bool anyAlive=false; for(auto& o:opps) if(o.alive) anyAlive=true;
         if(!anyAlive){ won=true; Audio::get().play("explosion",0.8f); }
     }
+}
+
+std::vector<Factory::PeerView> Factory::peerAvatars() const {
+    std::vector<PeerView> out;
+    for(auto& o:opps) if(o.alive && (o.avatarPos.x!=0.f || o.avatarPos.z!=0.f))
+        out.push_back({o.avatarPos, o.avatarYaw});
+    return out;
+}
+
+// The player's pistol — a hitscan ray from the eye. Hits (nearest along the ray)
+// enemies, robots, and opponent hubs, and does damage to whatever it strikes.
+void Factory::playerFire(glm::vec3 camPos, glm::vec3 camFwd){
+    if(phase!=P_PLAY || lost || won) return;
+    glm::vec3 rd = glm::normalize(camFwd);
+    const float REACH=140.f, HITR=1.2f;
+    float best=REACH; int what=-1, idx=-1;   // what: 0 enemy, 2 opp hub, 3 AI base
+    auto rayHit=[&](glm::vec3 c,float r,float& outT)->bool{
+        glm::vec3 oc=c-camPos; float t=glm::dot(oc,rd); if(t<0||t>best) return false;
+        glm::vec3 p=camPos+rd*t; if(glm::length(p-c)>r) return false; outT=t; return true; };
+    float t;
+    for(int i=0;i<(int)enemies.size();i++){ glm::vec3 c=enemies[i].pos+glm::vec3(0,GROUND+1.f,0);
+        if(rayHit(c,HITR,t)){ best=t; what=0; idx=i; } }
+    for(int i=0;i<(int)opps.size();i++){ if(!opps[i].alive) continue;
+        glm::vec3 c=opps[i].hub+glm::vec3(0,GROUND+2.f,0);
+        if(rayHit(c,3.2f,t)){ best=t; what=2; idx=i; } }
+    if(!netActive && ebaseAlive){ glm::vec3 c=ebasePos+glm::vec3(0,GROUND+2.f,0);
+        if(rayHit(c,3.2f,t)){ best=t; what=3; idx=-1; } }
+    tracers.push_back({camPos, camPos + rd*best, 0.08f, true});
+    Audio::get().play("laser",0.4f,1.25f);
+    const float DMG=34.f;
+    if(what==0)      enemies[idx].hp-=DMG;
+    else if(what==2) opps[idx].pendingDmg+=DMG;   // sent to the peer's hub in netTick
+    else if(what==3) ebaseHp-=DMG;
 }
 
 void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
@@ -447,6 +485,8 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         return;
     }
     if(phase!=P_PLAY) return;   // frozen ImGui screens (mode / drop)
+    playerCam = camPos;         // remember where the player is (for avatar sync)
+    playerYaw = std::atan2(camFwd.x, camFwd.z);
     netTick(dt);                // exchange snapshots with the LAN peer
     if(lost) return;            // defeated — everything freezes
     glm::vec3 g; bool onGround=rayGround(camPos,glm::normalize(camFwd),g);
@@ -504,18 +544,14 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             for(auto&m:machines){ glm::vec2 d{m.pos.x-g.x,m.pos.z-g.z};
                 if(glm::length(d)<2.8f){clear=false;break;} }
             bool nodeOk=(selType!=MINER)||nodeAt(g);
-            ghostValid=clear&&nodeOk&&std::abs(g.x)<mapHalf&&std::abs(g.z)<mapHalf;
+            bool buildable=(selType!=HUB);   // the Hub is premade at spawn, not built
+            ghostValid=clear&&nodeOk&&buildable&&std::abs(g.x)<mapHalf&&std::abs(g.z)<mapHalf;
             if(placeEdge && ghostValid){
-                if(selType==HUB){          // the Hub is a special structure, not a machine
-                    hubPos=ghostPos; hubHp=hubMax; hubAlive=true; syncCollision();
-                    Audio::get().play("shift",0.6f,1.1f);
-                } else {
-                    Machine m{}; m.type=selType; m.recipe=0; m.pos=ghostPos; m.yaw=ghostYaw;
-                    m.prog=0.f; m.onNode=(selType==MINER)&&nodeAt(ghostPos); m.out=0;
-                    for(int i=0;i<ITEM_N;i++) m.in[i]=0;
-                    machines.push_back(m); syncCollision();
-                    Audio::get().play("melee_hit",0.5f,0.9f);
-                }
+                Machine m{}; m.type=selType; m.recipe=0; m.pos=ghostPos; m.yaw=ghostYaw;
+                m.prog=0.f; m.onNode=(selType==MINER)&&nodeAt(ghostPos); m.out=0;
+                for(int i=0;i<ITEM_N;i++) m.in[i]=0;
+                machines.push_back(m); syncCollision();
+                Audio::get().play("melee_hit",0.5f,0.9f);
             }
         }
         // Dismantle: delete the aimed machine (or belt) with RMB — but not
@@ -535,15 +571,19 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             if(m.onNode && m.out<CAP){ m.prog+=dt; if(m.prog>=r.time){ m.out+=r.qOut; m.prog=0.f; } }
         } else {
             bool haveIn=(r.inA<0||m.in[r.inA]>=r.qA)&&(r.inB<0||m.in[r.inB]>=r.qB);
-            bool isFence = (r.deploy==DK_FENCE);       // fences stockpile, laid from the hub
-            bool deployable = r.deploy>=0 && !isFence; // other deployables use the map picker
-            bool ready = isFence     ? (haveIn && fenceBank<80)
+            // Fences, mines and turrets stockpile into banks, then get painted
+            // from the hub command map. Robots/tripwires still deploy directly.
+            int* bank = r.deploy==DK_FENCE?&fenceBank : r.deploy==DK_MINE?&mineBank
+                      : r.deploy==DK_TURRET?&turretBank : nullptr;
+            bool stock = (bank!=nullptr);
+            bool deployable = r.deploy>=0 && !stock;
+            bool ready = stock       ? (haveIn && *bank<120)
                        : deployable  ? (haveIn && m.hasDeploy)
                                      : (haveIn && m.out<CAP);
             if(ready){ m.prog+=dt;
                 if(m.prog>=r.time){
                     if(r.inA>=0)m.in[r.inA]-=r.qA; if(r.inB>=0)m.in[r.inB]-=r.qB;
-                    if(isFence){ fenceBank++; }
+                    if(stock){ (*bank)++; }
                     else if(deployable){
                         Deployable d{}; d.kind=r.deploy; d.goal=m.deployPt;
                         if(r.deploy==DK_ROBOT){ d.pos=m.pos; d.walking=true; }
@@ -638,7 +678,20 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             float minD=t.y+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } }
         for(auto&m:machines){ glm::vec3 h=footprint(m.type);
             glm::vec2 aw{d.pos.x-m.pos.x,d.pos.z-m.pos.z}; float dd=glm::length(aw);
-            float minD=std::max(h.x,h.z)+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } } }
+            float minD=std::max(h.x,h.z)+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } }
+        for(auto&f:deploys){ if(f.kind!=DK_FENCE) continue;   // fences are walls that block robots
+            glm::vec2 aw{d.pos.x-f.pos.x,d.pos.z-f.pos.z}; float dd=glm::length(aw);
+            float minD=1.3f+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } } }
+
+    // Keep enemies from stacking on top of each other (soft separation).
+    { const float E_RAD=0.7f;
+      for(size_t i=0;i<enemies.size();i++)
+        for(size_t j=i+1;j<enemies.size();j++){
+            glm::vec2 a{enemies[i].pos.x,enemies[i].pos.z}, b{enemies[j].pos.x,enemies[j].pos.z};
+            glm::vec2 dv=a-b; float dd=glm::length(dv); float minD=E_RAD*2.f;
+            if(dd<minD && dd>1e-3f){ glm::vec2 push=(dv/dd)*((minD-dd)*0.5f);
+                enemies[i].pos.x+=push.x; enemies[i].pos.z+=push.y;
+                enemies[j].pos.x-=push.x; enemies[j].pos.z-=push.y; } } }
 
     // Enemies march on the Hub (their objective), hitting the player, units,
     // and buildings that get in the way.
@@ -661,6 +714,9 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         glm::vec3 mt = tgt==0? pfeet : tgt==1? deploys[bestD].pos : tgt==2? machines[bestM].pos : base;
         glm::vec2 to{mt.x-e.pos.x,mt.z-e.pos.z}; float dist=glm::length(to);
         if(dist>2.2f){ glm::vec2 dir=avoid(e.pos,to/dist); e.pos.x+=dir.x*3.2f*dt; e.pos.z+=dir.y*3.2f*dt; }
+        for(auto&f:deploys){ if(f.kind!=DK_FENCE) continue;   // fence walls stop the advance
+            glm::vec2 aw{e.pos.x-f.pos.x,e.pos.z-f.pos.z}; float dd=glm::length(aw);
+            float minD=1.6f; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); e.pos.x+=p.x; e.pos.z+=p.y; } }
         if(e.fireCd<=0.f){
             if(tgt==0 && pd<11.f && playerHp){ *playerHp-=8.f; e.fireCd=0.9f; shoot(e.pos,pfeet+glm::vec3(0,0.6f,0),false); }
             else if(tgt==1 && bd<11.f){ deploys[bestD].hp-=10.f; e.fireCd=0.9f; shoot(e.pos,deploys[bestD].pos,false); }
@@ -668,9 +724,11 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             else if(hubAlive && hd<10.f){ hubHp-=9.f; e.fireCd=1.0f; shoot(e.pos,hubPos+glm::vec3(0,2.f,0),false); }
         }
     }
-    if(playerHp){ if(*playerHp<0.f) *playerHp=0.f;         // never negative
-        if(*playerHp<=0.f && !won) lost=true; }            // player dead = defeat
-    if(hubAlive && hubHp<=0.f){ hubAlive=false; if(!won) lost=true;   // hub destroyed = defeat
+    // The player is a commander, not the objective: they slowly regenerate and
+    // never "die" — only your HUB being destroyed knocks you out of the match.
+    if(playerHp){ if(*playerHp<100.f) *playerHp += 7.f*dt;
+        if(*playerHp>100.f)*playerHp=100.f; if(*playerHp<0.f)*playerHp=0.f; }
+    if(hubAlive && hubHp<=0.f){ hubAlive=false; if(!won) lost=true;   // your hub gone = you're out
         Audio::get().play("explosion",0.9f); }
 
     // Remove the dead and used-up; decay tracers
@@ -804,8 +862,9 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
                 cube(VP,b+glm::vec3(0,1.0f,0),{0.3f,0.3f,0.3f},{0.6f,0.63f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
                 cube(VP,b+glm::vec3(0,1.05f,0.5f),{0.08f,0.08f,0.5f},{0.3f,0.32f,0.36f},sun,fog,cam,1.f,texMetal,{1,1});
                 break;
-            case DK_FENCE:
-                cube(VP,b+glm::vec3(0,0.8f,0),{1.2f,0.8f,0.1f},{0.6f,0.55f,0.5f},sun,fog,cam,1.f,texMetal,{2,1});
+            case DK_FENCE:   // a tall, belt-textured wall that blocks robots
+                cube(VP,b+glm::vec3(0,0.95f,0),{1.3f,0.95f,0.16f},{0.34f,0.36f,0.4f},sun,fog,cam,1.f,texBelt,{2,2});
+                cube(VP,b+glm::vec3(0,1.95f,0),{1.35f,0.12f,0.24f},{0.72f,0.68f,0.5f},sun,fog,cam,1.f,texMetal,{2,1});
                 break;
             case DK_TRIPWIRE:
                 cube(VP,b+glm::vec3(-1.f,0.4f,0),{0.06f,0.4f,0.06f},{0.7f,0.7f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
@@ -964,10 +1023,21 @@ void Factory::renderHud(int winW,int winH){
             ImGui::InvisibleButton("drop",{MS,MS});
             if(ImGui::IsItemClicked(0)){ ImVec2 mp=ImGui::GetIO().MousePos;
                 float wx=((mp.x-o.x)/MS)*2*mapHalf-mapHalf, wz=((mp.y-o.y)/MS)*2*mapHalf-mapHalf;
-                float dEnemy=glm::length(glm::vec2(wx-ebasePos.x,wz-ebasePos.z));
-                if(dEnemy>60.f){ dropPos={wx,GROUND,wz}; dropReady=true; phase=P_PLAY;
-                    Audio::get().play("shift",0.6f); }   // hub is placed by the player
-                else Audio::get().play("crash",0.4f,0.7f);   // too close to enemy
+                float dEnemy = ebaseAlive ? glm::length(glm::vec2(wx-ebasePos.x,wz-ebasePos.z)) : 999.f;
+                if(dEnemy>60.f){
+                    // Premade hub at the chosen spot, nudged clear of any ore node.
+                    glm::vec3 hp={std::round(wx/GRID)*GRID, GROUND, std::round(wz/GRID)*GRID};
+                    for(auto&nd:nodes){ glm::vec2 d(hp.x-nd.pos.x,hp.z-nd.pos.z); float L=glm::length(d);
+                        if(L<9.f){ glm::vec2 pu = L>0.01f? d/L : glm::vec2(1,0);
+                            hp.x=std::round((nd.pos.x+pu.x*9.f)/GRID)*GRID;
+                            hp.z=std::round((nd.pos.z+pu.y*9.f)/GRID)*GRID; } }
+                    hubPos=hp; hubHp=hubMax; hubAlive=true;
+                    // Player spawns to the SIDE of the hub, also off any node.
+                    glm::vec3 sp=hp+glm::vec3(7.f,0.f,0.f);
+                    for(auto&nd:nodes){ if(glm::length(glm::vec2(sp.x-nd.pos.x,sp.z-nd.pos.z))<5.f) sp.x+=6.f; }
+                    dropPos=sp; dropReady=true; phase=P_PLAY; syncCollision();
+                    Audio::get().play("shift",0.6f);
+                } else Audio::get().play("crash",0.4f,0.7f);   // too close to enemy
             }
             if(ImGui::Button("Back")){ phase=P_LOBBY; lobbyEnter=true; }
             ImGui::End();
@@ -1017,7 +1087,7 @@ void Factory::renderHud(int winW,int winH){
                     // charge Parts for a miner upgrade (downgrades are free)
                     if(m.type==MINER && i>m.recipe && partsBank<MINER_COST[i]){
                         Audio::get().play("crash",0.4f,0.7f);   // not enough Parts
-                    } else if(r.deploy>=0 && r.deploy!=DK_FENCE){ pendingRecipe=i; mapMode=true; }   // → map (fences stockpile instead)
+                    } else if(r.deploy>=0 && r.deploy!=DK_FENCE && r.deploy!=DK_MINE && r.deploy!=DK_TURRET){ pendingRecipe=i; mapMode=true; }   // → map (fence/mine/turret stockpile instead)
                     else {
                         if(m.type==MINER && i>m.recipe) partsBank-=MINER_COST[i];
                         m.recipe=i; m.prog=0.f; m.out=0;
@@ -1112,7 +1182,17 @@ void Factory::renderHud(int winW,int winH){
         ImGui::SetNextWindowPos({winW*0.5f,winH*0.5f},ImGuiCond_Always,{0.5f,0.5f});
         float MS=460.f; ImGui::SetNextWindowSize({MS+30,MS+96});
         ImGui::Begin("HUB COMMAND",nullptr,ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoMove);
-        ImGui::TextColored({0.6f,0.9f,1.f,1.f},"Click: march robots    Drag: lay Fence wall (%d in stock)",fenceBank);
+        // Tool palette: pick what to draw on the map.
+        const char* bn[4]={"March","Fence","Mines","Turrets"};
+        for(int b=0;b<4;b++){ if(b) ImGui::SameLine();
+            bool sel=(hubBrush==b); if(sel) ImGui::PushStyleColor(ImGuiCol_Button,IM_COL32(70,130,95,255));
+            if(ImGui::Button(bn[b])) hubBrush=b; if(sel) ImGui::PopStyleColor(); }
+        ImGui::SameLine(); ImGui::TextColored({0.7f,0.95f,1.f,1.f},"  Fence:%d  Mines:%d  Turrets:%d",fenceBank,mineBank,turretBank);
+        const char* hint = hubBrush==0?"Click/drag: march all robots there"
+                         : hubBrush==1?"Drag: lay a fence wall (blocks robots)"
+                         : hubBrush==2?"Drag a box: paint a minefield"
+                                      :"Drag a box: place a turret nest";
+        ImGui::TextColored({0.6f,0.9f,1.f,1.f},"%s",hint);
         ImVec2 o=ImGui::GetCursorScreenPos(); ImDrawList* d=ImGui::GetWindowDrawList();
         auto w2m=[&](float wx,float wz){ return ImVec2(o.x+(wx+mapHalf)/(2*mapHalf)*MS,o.y+(wz+mapHalf)/(2*mapHalf)*MS); };
         auto m2w=[&](ImVec2 p){ return glm::vec2(((p.x-o.x)/MS)*2*mapHalf-mapHalf,((p.y-o.y)/MS)*2*mapHalf-mapHalf); };
@@ -1137,26 +1217,38 @@ void Factory::renderHud(int winW,int winH){
         ImGui::InvisibleButton("hubmap",{MS,MS});
         static bool dragging=false; static ImVec2 dragStart;
         if(ImGui::IsItemActivated()){ dragging=true; dragStart=ImGui::GetIO().MousePos; }
-        if(dragging){ ImVec2 cur=ImGui::GetIO().MousePos;   // live drag preview
-            d->AddLine(dragStart,cur,IM_COL32(200,220,120,220),3.f); }
+        if(dragging){ ImVec2 cur=ImGui::GetIO().MousePos;   // live preview: line vs. box
+            if(hubBrush==2||hubBrush==3) d->AddRect(dragStart,cur,IM_COL32(200,220,120,230),0,0,2.f);
+            else d->AddLine(dragStart,cur,IM_COL32(200,220,120,220),3.f); }
         if(dragging && ImGui::IsItemDeactivated()){
             dragging=false; ImVec2 end=ImGui::GetIO().MousePos;
-            float dx=end.x-dragStart.x, dy=end.y-dragStart.y; float dpix=std::sqrt(dx*dx+dy*dy);
+            float dpix=std::sqrt((end.x-dragStart.x)*(end.x-dragStart.x)+(end.y-dragStart.y)*(end.y-dragStart.y));
             glm::vec2 A=m2w(dragStart), B=m2w(end);
-            if(dpix<8.f){   // a click → march every robot here
+            if(hubBrush==0){            // March robots to the target
                 glm::vec3 tgt{std::round(B.x/GRID)*GRID,0.f,std::round(B.y/GRID)*GRID};
                 for(auto&bar:machines) if(bar.type==BARRACKS)
                     while(bar.in[ROBOT_ITEM]>0){ bar.in[ROBOT_ITEM]--; Deployable rb{}; rb.kind=DK_ROBOT; rb.pos=bar.pos; rb.goal=tgt; rb.walking=true; deploys.push_back(rb); }
                 for(auto&d2:deploys) if(d2.kind==DK_ROBOT){ d2.goal=tgt; d2.walking=true; }
                 Audio::get().play("interact",0.6f,1.3f);
-            } else {        // a drag → lay a wall of fences from stock
-                float wlen=glm::length(B-A); int count=(int)(wlen/4.f)+1;
+            } else if(hubBrush==1){    // Fence wall from stock (a tall belt that blocks robots)
+                float wlen=glm::length(B-A); int count=(int)(wlen/3.f)+1;
                 glm::vec2 step=(count>1)?(B-A)/(float)(count-1):glm::vec2(0);
                 int placed=0;
                 for(int i=0;i<count && fenceBank>0;i++){ glm::vec2 p=A+step*(float)i;
                     Deployable f{}; f.kind=DK_FENCE; f.pos={p.x,0.f,p.y}; f.walking=false; deploys.push_back(f);
                     fenceBank--; placed++; }
-                if(placed) Audio::get().play("melee_hit",0.5f,0.8f);
+                if(placed){ syncCollision(); Audio::get().play("melee_hit",0.5f,0.8f); }
+            } else {                   // Mines / Turrets — paint a box with a grid array
+                bool mine=(hubBrush==2); int* bank=mine?&mineBank:&turretBank;
+                float SP=mine?4.f:9.f;   // turrets are sparser
+                glm::vec2 lo{std::min(A.x,B.x),std::min(A.y,B.y)}, hi{std::max(A.x,B.x),std::max(A.y,B.y)};
+                if(dpix<8.f){ hi=lo+glm::vec2(SP,SP); }   // a tap drops a single one
+                int placed=0;
+                for(float x=lo.x;x<=hi.x && *bank>0;x+=SP)
+                for(float z=lo.y;z<=hi.y && *bank>0;z+=SP){
+                    Deployable dd{}; dd.kind=mine?DK_MINE:DK_TURRET; dd.pos={std::round(x/GRID)*GRID,0.f,std::round(z/GRID)*GRID};
+                    dd.walking=false; deploys.push_back(dd); (*bank)--; placed++; }
+                if(placed) Audio::get().play("melee_hit",0.5f,mine?0.7f:1.0f);
             }
         }
         if(ImGui::Button("Close")) cmdMapOpen=false;

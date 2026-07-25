@@ -67,6 +67,14 @@ public:
     void render(const glm::mat4& VP, glm::vec3 sun, float fog, glm::vec3 camPos, double now);
     void renderHud(int winW, int winH);
 
+    // The player's pistol: hitscan that damages whatever it hits (enemies,
+    // robots, and opponent hubs). Called by main on a fire (LMB) edge in play.
+    void playerFire(glm::vec3 camPos, glm::vec3 camFwd);
+
+    // Other players' avatars for main to draw with the character model.
+    struct PeerView { glm::vec3 pos; float yaw; };
+    std::vector<PeerView> peerAvatars() const;
+
     // Tree positions for main to draw with the real OBJ model: x,z = pos,
     // y = radius/scale hint.
     const std::vector<glm::vec3>& treeList() const { return trees; }
@@ -125,6 +133,11 @@ private:
     bool  won = false, lost = false;
     int   partsBank = 0;           // Parts = currency for upgrades
     int   fenceBank = 0;           // Fences stockpiled in machines, laid from the hub map
+    int   mineBank = 0;            // Mines stockpiled, painted as a field from the hub map
+    int   turretBank = 0;          // Turrets stockpiled, painted from the hub map
+    int   hubBrush = 0;            // hub-map tool: 0=march robots 1=fence 2=mines 3=turrets
+    glm::vec3 playerCam{0.f};      // latest player camera pos (for avatar sync)
+    float playerYaw = 0.f;
     // Player hub (home base) — placed at the drop point
     glm::vec3 hubPos{0.f};
     float hubHp = 0.f, hubMax = 1400.f;
@@ -134,7 +147,8 @@ private:
     // ── Net mirror: every other player, keyed by a random id. Each opponent's
     // hub is a hostile base you fight; their robots stream in as red contacts.
     struct Opp { unsigned id; glm::vec3 hub; float hp; bool alive;
-                 std::vector<glm::vec2> units; float pendingDmg; float lastSeen; };
+                 std::vector<glm::vec2> units; float pendingDmg; float lastSeen;
+                 glm::vec3 avatarPos{0.f}; float avatarYaw = 0.f; };
     Net   net;
     unsigned myId = 0;             // this player's random id (set on host/join)
     float netSendCd = 0.f;         // throttle snapshots to ~15 Hz
