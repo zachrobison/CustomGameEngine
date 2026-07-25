@@ -182,6 +182,8 @@ int main(int argc, char** argv) {
     GltfModel gunModel;         // first-person viewmodel (Kenney blaster, CC0)
     if (!gunModel.load("assets/models/gun.glb"))
         fputs("GltfModel: gun.glb failed to load (viewmodel skipped)\n", stderr);
+    GltfModel raygunModel;      // Iron Command: cheesy atomic-age ray gun
+    raygunModel.load("assets/models/raygun.glb");
 
     GltfModel swordModel;       // melee visual (Knight's Sword, CC0/OGA)
     if (!swordModel.load("assets/models/sword.obj"))
@@ -1210,8 +1212,17 @@ int main(int argc, char** argv) {
             float s = 0.6f;
             glm::mat4 gm(glm::vec4(r*s, 0), glm::vec4(u*s, 0),
                          glm::vec4(-f*s, 0), glm::vec4(gp, 1));  // barrel is -Z
-            gunModel.renderMatrix(proj * view, gm, sunDir,
-                                  worldSettings.fog_density, player.camera.position);
+            // Iron Command carries the atomic-age ray gun (barrel modeled along
+            // +X, so rotate -90° about Y to face it forward); other games keep
+            // the Kenney blaster.
+            if (gameCfg.factory && raygunModel.loaded()) {
+                glm::mat4 rm = glm::rotate(gm, -glm::half_pi<float>(), glm::vec3(0,1,0));
+                raygunModel.renderMatrix(proj * view, rm, sunDir,
+                                         worldSettings.fog_density, player.camera.position);
+            } else {
+                gunModel.renderMatrix(proj * view, gm, sunDir,
+                                      worldSettings.fog_density, player.camera.position);
+            }
         }
 
         // Iron Command: animated wizard hand as the first-person build tool
