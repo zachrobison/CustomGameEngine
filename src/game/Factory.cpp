@@ -949,6 +949,23 @@ void Factory::totals(int inv[ITEM_N]) const{
 void Factory::renderHud(int winW,int winH){
     if(!active) return;
 
+    // ── Pause menu (ESC) ─────────────────────────────────────────────────
+    if(paused){
+        ImDrawList* bg=ImGui::GetBackgroundDrawList();
+        bg->AddRectFilled({0,0},{(float)winW,(float)winH}, IM_COL32(6,8,12,180)); // dim
+        ImGui::SetNextWindowPos({winW*0.5f,winH*0.5f},ImGuiCond_Always,{0.5f,0.5f});
+        ImGui::SetNextWindowSize({300,0});
+        ImGui::Begin("PAUSED",nullptr,ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoMove);
+        ImGui::TextColored({0.7f,0.9f,1.f,1.f},"Iron Command — Paused");
+        ImGui::Separator();
+        float w=ImGui::GetContentRegionAvail().x;
+        if(ImGui::Button("Resume",{w,40})) paused=false;
+        if(ImGui::Button("Main Menu",{w,34})) reqQuitToMenu=true;
+        if(ImGui::Button("Quit Game",{w,34})) reqQuit=true;
+        ImGui::End();
+        return;   // hide the normal HUD while paused
+    }
+
     // ── Walkable lobby: just a crosshair prompt, no blocking window ───────
     if(phase==P_LOBBY){
         ImDrawList* dl=ImGui::GetForegroundDrawList();
@@ -1026,7 +1043,8 @@ void Factory::renderHud(int winW,int winH){
                 float dEnemy = ebaseAlive ? glm::length(glm::vec2(wx-ebasePos.x,wz-ebasePos.z)) : 999.f;
                 if(dEnemy>60.f){
                     // Premade hub at the chosen spot, nudged clear of any ore node.
-                    glm::vec3 hp={std::round(wx/GRID)*GRID, GROUND, std::round(wz/GRID)*GRID};
+                    // y=0 here; the renderer/collision add GROUND, so it sits flat.
+                    glm::vec3 hp={std::round(wx/GRID)*GRID, 0.f, std::round(wz/GRID)*GRID};
                     for(auto&nd:nodes){ glm::vec2 d(hp.x-nd.pos.x,hp.z-nd.pos.z); float L=glm::length(d);
                         if(L<9.f){ glm::vec2 pu = L>0.01f? d/L : glm::vec2(1,0);
                             hp.x=std::round((nd.pos.x+pu.x*9.f)/GRID)*GRID;

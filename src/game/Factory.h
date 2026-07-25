@@ -88,6 +88,12 @@ public:
     bool menuOpen = false;              // Satisfactory-style recipe popup
     bool targeting() const { return false; }   // (legacy 3D picker retired)
 
+    // Pause menu (ESC). main toggles `paused`; the menu is drawn in renderHud
+    // and sets these request flags, which main acts on and clears.
+    bool paused        = false;
+    bool reqQuitToMenu = false;   // "Main Menu" pressed
+    bool reqQuit       = false;   // "Quit Game" pressed
+
 private:
     static const int CAP = 40;
     struct Machine {

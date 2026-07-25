@@ -372,6 +372,7 @@ int main(int argc, char** argv) {
 
     // Input state
     bool   mouseCaptured = true;
+    bool   escPausePrev  = false;   // Iron Command pause-menu ESC edge
     bool   tabWasDown    = false;
     bool   f5WasDown     = false, f6WasDown = false;
     bool   eWasDown      = false;
@@ -467,6 +468,20 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        // ── Iron Command pause menu (ESC) ─────────────────────────────────
+        if (gameCfg.factory && factory.active) {
+            bool escNow = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+            if (escNow && !escPausePrev && !factory.inMenuPhase()) {
+                factory.paused = !factory.paused;
+                mouseCaptured  = !factory.paused;
+                glfwSetInputMode(window, GLFW_CURSOR,
+                    factory.paused ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                firstFrame = true;
+            }
+            escPausePrev = escNow;
+            if (factory.paused) dt = 0.f;   // freeze the simulation; keep rendering
+        }
+
         // ── Level watcher: fires on ANY level switch (T, portals, UI) ─────
         if (ui.scenePanel.currentLevelId() != lastLevelId) {
             if (!lastLevelId.empty())              // silent on boot
@@ -535,8 +550,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Tab or Escape: toggle cursor / exit play mode
-        {
+        // Tab or Escape: toggle cursor / exit play mode.
+        // (Iron Command uses ESC for its own pause menu, handled above.)
+        if (!gameCfg.factory) {
             bool tabDown = glfwGetKey(window, GLFW_KEY_TAB)   == GLFW_PRESS;
             bool escDown = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
             if (ui.playMode) {
@@ -742,13 +758,13 @@ int main(int argc, char** argv) {
                              (factory.menuOpen || factory.inMenuPhase() || factory.commandMapOpen()) ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
             // LMB places when building OR when picking a deploy point; menu
             // clicks are consumed by ImGui, so don't forward them.
-            bool factoryPlace = lmbEdge && !factory.menuOpen && !factory.commandMapOpen() &&
+            bool factoryPlace = lmbEdge && !factory.menuOpen && !factory.commandMapOpen() && !factory.paused &&
                                 (factory.buildMode || factory.targeting());
             bool deleteEdge = factory.buildMode && rmbEdge;
             factory.update(dt, now, player.camera.position, player.camera.forward(),
                            factoryPlace, deleteEdge, interactEdge, &player.health);
             // Pistol: LMB in play fires a hitscan that damages enemies / rival hubs.
-            if (factory.phase == Factory::P_PLAY && lmbEdge &&
+            if (factory.phase == Factory::P_PLAY && lmbEdge && !factory.paused &&
                 !factory.buildMode && !factory.menuOpen && !factory.commandMapOpen())
                 factory.playerFire(player.camera.position, player.camera.forward());
             // Player picked a drop point → teleport them there and reveal
@@ -1408,6 +1424,15 @@ int main(int argc, char** argv) {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             firstFrame = true;
         }
+
+        // Pause-menu requests (Iron Command)
+        if (factory.reqQuitToMenu) {
+            factory.reqQuitToMenu = false; factory.paused = false;
+            inMenu = true;
+            glfwSwapBuffers(window);
+            continue;
+        }
+        if (factory.reqQuit) { glfwSetWindowShouldClose(window, 1); }
 
         glfwSwapBuffers(window);
     }
