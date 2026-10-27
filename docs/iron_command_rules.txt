@@ -1,0 +1,245 @@
+IRON COMMAND — GAME RULES AND MECHANICS
+========================================
+
+This document describes the rules, systems, and controls of Iron Command, a
+first-person factory-and-combat strategy game. It is written as reference
+material: each section is self-contained so it can be read on its own.
+
+
+1. OVERVIEW
+-----------
+Iron Command is a first-person "factory real-time-strategy" game with a cheesy
+1950s atomic-age science-fiction theme (ray guns, chrome robots, domed bases).
+It blends two genres: building an automated factory (in the style of
+Satisfactory) and commanding an army to destroy your rivals (in the style of
+Command & Conquer).
+
+You play as a commander. You land on a battlefield, build a factory that
+automatically turns raw ore into robots and defenses, and use that army to
+destroy every rival's home base. It is a free-for-all: there are no teams, and
+the last commander with a surviving home base wins.
+
+The game is played from a first-person view. You walk around your factory on
+foot, place buildings, and fight with a ray gun, while also commanding robots
+from a top-down tactical map.
+
+
+2. HOW TO WIN AND LOSE
+----------------------
+- WIN CONDITION: You win by being the last competitor standing. When every
+  rival commander's home base (the "Hub") has been destroyed and yours is still
+  alive, you win the match.
+- LOSE CONDITION: You are knocked out of the match when your own Hub is
+  destroyed. Losing your Hub is the only way to be eliminated.
+- PLAYER DEATH IS NOT A LOSS: If your character's health reaches zero in combat,
+  you do not lose. You respawn next to your Hub at full health and keep playing.
+  Only the Hub being destroyed ends your match. The player is a commander, not
+  the objective.
+
+
+3. THE HUB (YOUR HOME BASE)
+---------------------------
+The Hub is your home base and the thing you must protect. It is the heart of
+the game's win/lose rules.
+
+- The Hub is PREMADE: it is automatically placed at the spot you choose when you
+  drop onto the map. You do not build it yourself, and it is always nudged clear
+  of resource (ore) deposits so it never blocks your mining.
+- You spawn standing next to your Hub at the start of a match.
+- The Hub has a large pool of health (1400 points). Enemy robots and enemy
+  players attack it; when its health hits zero, it is destroyed and you are out.
+- The Hub is also your command center: when you stand next to it and press the
+  interact key, it opens the top-down Command Map (see Section 8).
+
+
+4. GAME FLOW: FROM MENU TO BATTLE
+---------------------------------
+A match proceeds through several phases:
+
+1. MODE SELECT: Choose Offline (skirmish) or a LAN multiplayer option (Host a
+   match, or Join a match by entering the host's network address).
+2. LOBBY: A walkable staging room. Walk to the glowing "War Table" in the center
+   and interact with it to proceed to deployment.
+3. DROP: A top-down map of the battlefield appears. Click where you want to land.
+   Your premade Hub is placed there and you spawn beside it.
+4. PLAY: The main game. Build your factory, defend your Hub, and attack rivals.
+
+
+5. THE BATTLEFIELD
+------------------
+The battlefield is a large, procedurally generated outdoor map (roughly 740
+units across). It contains:
+- ORE DEPOSITS (resource nodes): the raw material your whole economy starts
+  from. Miners must be placed directly on these.
+- FORESTS and HILLS: trees and raised terrain that act as obstacles and cover.
+- PASSAGEWAYS: cleared corridors through the forests.
+- FOG OF WAR: the map starts unexplored. You reveal terrain by walking around.
+  You can still command robots into unexplored areas from the Command Map.
+
+
+6. THE PRODUCTION CHAIN (RESOURCES AND ITEMS)
+---------------------------------------------
+Everything is built from ore through a chain of refining steps. The seven item
+types are:
+- ORE: raw material mined from deposits.
+- INGOT: smelted from ore.
+- SCREW, PLATE, ROD: intermediate components made from ingots.
+- PART: an advanced component; Parts are also the currency used for upgrades.
+- ROBOT: the finished combat unit.
+
+Items are carried automatically between machines by conveyor belts.
+
+
+7. BUILDINGS (MACHINES)
+-----------------------
+You enter Build mode to place machines on the ground. Each machine is selected
+from the build menu, placed on a grid, and then given a recipe by interacting
+with it. The building types are:
+
+- MINER: Must be placed on an ore deposit. Mines ore. It has three selectable
+  recipes that trade speed for output: "Mine Ore" (1 ore), "Overclock" (2 ore),
+  and "Turbo" (3 ore).
+- SMELTER: Converts 1 Ore into 1 Ingot (about 2 seconds).
+- CONSTRUCTOR: Converts ingots into intermediate parts. Recipes:
+  1 Ingot -> 2 Screws; 1 Ingot -> 1 Plate; 1 Ingot -> 1 Rod.
+- ASSEMBLER: The most important machine. It makes Parts, Robots, and all the
+  defenses. Recipes:
+    * 1 Plate + 2 Screws -> 1 Part
+    * 1 Rod + 1 Screw -> 1 Part
+    * 2 Plates + 4 Screws -> 1 Robot
+    * Turret (from 1 Plate + 1 Rod)
+    * Mine (from 1 Plate + 2 Screws)
+    * Fence (from 2 Rods)
+    * Tripwire (from 1 Rod + 1 Screw)
+- BARRACKS: A storage depot for robots. Robot items are belted in and held here
+  until you order them out from a Terminal or the Hub Command Map.
+- TERMINAL: Has no production. Interacting with it opens the Command Map, the
+  same top-down view the Hub provides.
+- HUB: Your home base (premade, not built by hand — see Section 3).
+- CONVEYOR BELT: Carries items from one machine to another. Belts are drawn as a
+  path and automatically split and merge the flow of items between machines.
+
+
+8. THE COMMAND MAP (COMMANDING YOUR ARMY)
+-----------------------------------------
+Press the interact key next to your Hub (or at any Terminal) to open the Command
+Map: a flat, top-down tactical view of the battlefield. From here you command
+your robots and place your defenses by drawing on the map. The map has a tool
+palette with four tools:
+
+- MARCH: Click or drag anywhere to send all of your robots to that spot. You can
+  order them into unexplored territory, not just places you have already seen.
+- FENCE: Drag to lay a wall of fences. A fence is a tall barrier (like a tall
+  conveyor belt stood on end) that physically blocks robots from passing.
+- MINES: Drag a box to paint a minefield — a grid of mines fills the area.
+- TURRETS: Drag a box to place a cluster of automated turrets.
+
+Fences, mines, and turrets are not placed directly in the world. They are first
+manufactured at an Assembler, where they accumulate in a stockpile ("bank").
+You then spend that stockpile by drawing them onto the Command Map from the Hub.
+
+
+9. COMBAT
+---------
+- YOUR RAY GUN: Your character carries a ray gun. Firing it is a hitscan (instant
+  beam). It damages anything hostile it hits — enemy robots and rival Hubs.
+- ROBOTS: Your robots move and shoot at the same time without stopping. They have
+  an aggression zone: they automatically seek out and fire on the nearest enemy
+  within range, or march on the nearest rival Hub if no enemies are near.
+- DEFENSES:
+    * FENCE: a wall that blocks enemy robots from advancing.
+    * MINE: detonates when any hostile robot (an enemy's, never your own) steps
+      near it, dealing heavy area damage.
+    * TURRET: an automated gun that fires on nearby enemies.
+    * TRIPWIRE: a trap that triggers on a passing enemy.
+- MINIMAP: A live minimap in the top-right corner always shows your Hub, your
+  robots, and — updating continuously — every rival's Hub, robots, and player
+  position.
+
+
+10. MULTIPLAYER (FREE-FOR-ALL)
+------------------------------
+Iron Command is designed as a free-for-all: every player is independent and
+fights everyone else.
+
+- There are NO AI opponents. The only enemies are the other human players. (In a
+  match with no other players, there is simply no one to fight.)
+- Each player has their own Hub, their own factory, and their own robots.
+- You can see rivals in your world: their Hub, their robots, and their player
+  avatar all appear and update live.
+- CONNECTING: One player clicks "Host a match" and the game shows that player's
+  local network (LAN) address. The other players choose "Join" and type in that
+  address. Everyone plays over the same local network. The network port used is
+  49813.
+- SAME-NETWORK REQUIREMENT: Standard play requires all players to be on the same
+  local network (the same Wi-Fi/router). Playing across the internet is not
+  built in directly; it requires an external tool (such as a virtual-network app
+  like Tailscale, router port-forwarding, or a relay server).
+- Both players must finish dropping into the battlefield before they can see
+  each other.
+
+
+11. CONTROLS (DEFAULT)
+----------------------
+- WASD: move your character.
+- MOUSE: look around and aim.
+- LEFT MOUSE BUTTON: fire the ray gun (or place a building while in Build mode).
+- B: toggle Build mode (place machines and draw conveyor belts).
+- RIGHT MOUSE BUTTON: dismantle the targeted building (while in Build mode).
+- E (interact): open a machine's recipe menu, open the Hub/Terminal Command Map,
+  or use the War Table in the lobby.
+- ESC: open the Pause menu (Resume / Main Menu / Quit). Pausing freezes the game
+  and frees the mouse cursor.
+
+
+12. STRATEGY NOTES
+------------------
+- Your economy is the foundation: ore -> ingots -> components -> robots/defenses.
+  A bigger, faster factory means a bigger army.
+- Parts double as upgrade currency, so advanced production also funds upgrades.
+- Defenses (fences, mines, turrets) are made in the factory first, then drawn
+  onto the Command Map from your Hub — plan production for defense, not just
+  offense.
+- Protect the Hub at all costs: losing it ends your match, no matter how strong
+  your army is.
+- Dying is only a setback — you respawn at your Hub — so you can play
+  aggressively with your ray gun.
+
+
+13. GLOSSARY
+------------
+- HUB: your home base; its destruction eliminates you; last Hub standing wins.
+- COMMANDER: the player; a commander is not the objective and respawns on death.
+- COMMAND MAP: the top-down tactical screen opened at the Hub or a Terminal, used
+  to march robots and draw defenses.
+- MINER / SMELTER / CONSTRUCTOR / ASSEMBLER / BARRACKS / TERMINAL: the factory
+  machine types.
+- CONVEYOR BELT: automatic item transport between machines.
+- ORE / INGOT / SCREW / PLATE / ROD / PART / ROBOT: the seven item types, in
+  roughly increasing order of refinement.
+- PART: advanced component and the upgrade currency.
+- ROBOT: the mobile combat unit you mass-produce.
+- DEFENSES: fences (walls), mines (area traps), turrets (auto-guns), tripwires.
+- BANK / STOCKPILE: the reserve of manufactured fences/mines/turrets waiting to
+  be drawn onto the map.
+- FOG OF WAR: unexplored terrain, revealed by walking.
+- FREE-FOR-ALL: every player fights every other player; no teams.
+- LAN: local area network; the default way multiplayer connects.
+
+
+14. QUICK FACT SUMMARY (FOR RETRIEVAL)
+--------------------------------------
+- Genre: first-person factory real-time strategy. Theme: 1950s atomic-age sci-fi.
+- Objective: destroy all rival Hubs; be the last Hub standing.
+- You lose only if your own Hub is destroyed.
+- Player death causes a respawn at the Hub, not a loss.
+- Economy chain: Ore -> Ingot -> Screw/Plate/Rod -> Part -> Robot.
+- Machines: Miner, Smelter, Constructor, Assembler, Barracks, Terminal, Hub,
+  Conveyor belt.
+- Defenses: Fence (wall), Mine (area trap), Turret (auto-gun), Tripwire.
+- Defenses are built in the Assembler, stockpiled, then drawn onto the Command
+  Map from the Hub.
+- Weapon: a hitscan ray gun that damages enemy robots and rival Hubs.
+- Multiplayer: LAN free-for-all, no AI enemies, connect by host IP on port 49813.
+- Hub health: 1400. Map size: about 740 units across.
+</content>
