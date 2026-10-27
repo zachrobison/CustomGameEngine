@@ -109,7 +109,8 @@ static void addCone(std::vector<float>& verts, std::vector<uint32_t>& idx,
     }
 }
 
-void TreeRenderer::buildFrom(const std::vector<glm::vec3>& trees, float groundY) {
+void TreeRenderer::buildFrom(const std::vector<glm::vec3>& trees,
+                             const std::function<float(float, float)>& groundAt) {
     if (!prog) initShader();
     std::vector<float>    verts;
     std::vector<uint32_t> idx;
@@ -118,7 +119,7 @@ void TreeRenderer::buildFrom(const std::vector<glm::vec3>& trees, float groundY)
     for (auto& t : trees) {
         float sz = t.y * 0.7f;                 // t.y is the size hint
         float trunkH = sz*2.8f, trunkR = sz*0.18f, foliageR = sz*1.6f, foliageH = sz*3.5f;
-        glm::vec3 trunkBase = {t.x, groundY, t.z};
+        glm::vec3 trunkBase = {t.x, groundAt(t.x, t.z) - 0.15f, t.z};   // sunk a touch for slopes
         glm::vec3 trunkCol  = {0.38f+lcg()*0.06f, 0.25f, 0.14f};
         float gr = 0.22f+lcg()*0.12f;
         glm::vec3 leafCol  = {0.15f+lcg()*0.08f, 0.38f+gr, 0.10f};

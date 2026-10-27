@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <functional>
 
 class World;
 class Weapon;
@@ -62,6 +63,9 @@ public:
     bool      vehicleDrifting  = false;
     float     vehicleMaxSpeed  = 42.f;   // ~150 km/h default
     float     vehicleTurnRate  = 120.f;  // deg/s
+
+    // Optional floor for flat-terrain modes (Iron Command's hills); unset = Y=20.
+    std::function<float(float, float)> groundAt;
 
     Weapon* currentWeapon() const;
 

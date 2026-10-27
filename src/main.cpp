@@ -45,6 +45,7 @@
 #include <string>
 #include <fstream>
 #include <map>
+#include <functional>
 
 // Mouse-wheel routing (GLFW callbacks can't capture): RTS zoom + factory
 // build-palette cycling.
@@ -53,7 +54,7 @@ static Factory* g_factoryPtr = nullptr;
 static void rtsScrollCb(GLFWwindow* w, double xo, double yo) {
     ImGui_ImplGlfw_ScrollCallback(w, xo, yo);
     if (g_rtsScroll) g_rtsScroll->addScroll((float)yo);
-    if (g_factoryPtr && g_factoryPtr->buildMode && yo != 0.0)
+    if (g_factoryPtr && g_factoryPtr->buildMode && !g_factoryPtr->commandMapOpen() && yo != 0.0)
         g_factoryPtr->cycleType(yo > 0 ? 1 : -1);
 }
 
@@ -184,6 +185,13 @@ int main(int argc, char** argv) {
         fputs("GltfModel: gun.glb failed to load (viewmodel skipped)\n", stderr);
     GltfModel raygunModel;      // Iron Command: cheesy atomic-age ray gun
     raygunModel.load("assets/models/raygun.glb");
+    GltfModel icRaygun, icHand;     // Iron Command view model (tools/asset_gen/viewmodel.py)
+    icRaygun.load("assets/models/ironcommand/ic_raygun.glb");
+    icHand.load("assets/models/ironcommand/ic_hand_right.glb");
+    GltfModel icFab, icFabRings, icHandL;   // the Fabricator build tool, left glove
+    icFab.load("assets/models/ironcommand/ic_fabricator.glb");
+    icFabRings.load("assets/models/ironcommand/ic_fabricator_rings.glb");
+    icHandL.load("assets/models/ironcommand/ic_hand_left.glb");
 
     GltfModel swordModel;       // melee visual (Knight's Sword, CC0/OGA)
     if (!swordModel.load("assets/models/sword.obj"))
@@ -303,6 +311,8 @@ int main(int argc, char** argv) {
     RaceBots       raceBots;   // active only on levels with a waypoints.json
     Rts            rts;        // Iron Command: top-down factory-RTS mode (legacy)
     Factory        factory;    // Iron Command: first-person build/factory
+    std::function<float(float, float)> factoryGround =      // Iron Command's hilly floor
+        [&factory](float x, float z) { return factory.heightAt(x, z); };
     g_rtsScroll   = &rts;
     g_factoryPtr  = &factory;
     glfwSetScrollCallback(window, rtsScrollCb);
@@ -340,7 +350,6 @@ int main(int argc, char** argv) {
         if (g.factory) {
             factory.setCollider(&props);
             factory.reset((unsigned)time(nullptr));
-            factoryTrees.buildFrom(factory.treeList(), 20.f);   // procedural trees
             ui.extraHud = [&]{ int w,h; glfwGetWindowSize(window,&w,&h);
                                factory.renderHud(w,h); };
         } else {
@@ -704,6 +713,8 @@ int main(int argc, char** argv) {
         }
 
         // Update (frozen during Iron Command's front-end menus and on defeat)
+        bool hills = gameCfg.factory && factory.active;   // walk on Iron Command's terrain
+        if (hills != (bool)player.groundAt) player.groundAt = hills ? factoryGround : nullptr;
         if (!(gameCfg.factory && (factory.inMenuPhase() || factory.defeated())))
             player.update(window, world, entities, worldSettings, playerSettings,
                           keyBinds, dt, mouseCaptured, &props);
@@ -728,7 +739,6 @@ int main(int argc, char** argv) {
             bool en = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
             if (en && !enterPrev) {
                 factory.reset((unsigned)time(nullptr));
-                factoryTrees.buildFrom(factory.treeList(), 20.f);
                 player.health = player.maxHealth;
             }
             enterPrev = en;
@@ -755,7 +765,7 @@ int main(int argc, char** argv) {
             // Menu releases the cursor so you can click recipe buttons
             // Front-end menus (mode/lobby/drop) + hub command map release the cursor too
             glfwSetInputMode(window, GLFW_CURSOR,
-                             (factory.menuOpen || factory.inMenuPhase() || factory.commandMapOpen()) ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                             (factory.paused || factory.menuOpen || factory.inMenuPhase() || factory.commandMapOpen()) ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
             // LMB places when building OR when picking a deploy point; menu
             // clicks are consumed by ImGui, so don't forward them.
             bool factoryPlace = lmbEdge && !factory.menuOpen && !factory.commandMapOpen() && !factory.paused &&
@@ -763,13 +773,17 @@ int main(int argc, char** argv) {
             bool deleteEdge = factory.buildMode && rmbEdge;
             factory.update(dt, now, player.camera.position, player.camera.forward(),
                            factoryPlace, deleteEdge, interactEdge, &player.health);
+            if (factory.mapDirty) {   // new map (match reset or the host's seed arrived)
+                factoryTrees.buildFrom(factory.treeList(), factoryGround);
+                factory.mapDirty = false;
+            }
             // Pistol: LMB in play fires a hitscan that damages enemies / rival hubs.
             if (factory.phase == Factory::P_PLAY && lmbEdge && !factory.paused &&
                 !factory.buildMode && !factory.menuOpen && !factory.commandMapOpen())
                 factory.playerFire(player.camera.position, player.camera.forward());
             // Player picked a drop point → teleport them there and reveal
             if (factory.dropReady) {
-                player.camera.position = { factory.dropPos.x, 21.65f, factory.dropPos.z };
+                player.camera.position = { factory.dropPos.x, factory.heightAt(factory.dropPos.x, factory.dropPos.z) + 1.65f, factory.dropPos.z };
                 player.velocity = {0,0,0};
                 factory.dropReady = false;
             }
@@ -932,7 +946,7 @@ int main(int argc, char** argv) {
                 player.velocity = {0, 0, 0};
                 if (gameCfg.factory && !factory.defeated()) {
                     glm::vec3 h = factory.hubPosition();
-                    player.camera.position = { h.x + 7.f, 21.65f, h.z };  // beside the hub
+                    player.camera.position = { h.x + 7.f, factory.heightAt(h.x + 7.f, h.z) + 1.65f, h.z };  // beside the hub
                 } else if (!gameCfg.factory) {
                     player.camera.position = {0.5f, startH, 0.5f};
                 }
@@ -1234,9 +1248,22 @@ int main(int argc, char** argv) {
             glm::mat4 gm(glm::vec4(r*s, 0), glm::vec4(u*s, 0),
                          glm::vec4(-f*s, 0), glm::vec4(gp, 1));  // barrel is -Z
             // Iron Command carries the atomic-age ray gun (barrel modeled along
-            // +X, so rotate -90° about Y to face it forward); other games keep
-            // the Kenney blaster.
-            if (gameCfg.factory && raygunModel.loaded()) {
+            // -X, grip down -Y; rotating -90° about Y turns -X onto the view's
+            // forward); other games keep the Kenney blaster.
+            if (gameCfg.factory && icRaygun.loaded()) {
+                // Ray gun + gloved right hand, modelled at real size: +Z barrel,
+                // +Y up, -X the holder's right; origin = top of the grip. Same
+                // pose as the Blender preview camera (agen.viewmodel_camera).
+                glm::vec3 vp = player.camera.position + f*0.40f + r*0.20f - u*0.155f;
+                glm::mat4 vm(glm::vec4(-r, 0), glm::vec4(u, 0), glm::vec4(f, 0), glm::vec4(vp, 1));
+                vm = glm::rotate(vm, glm::radians(-10.f), glm::vec3(0,1,0));  // turned out to show its flank
+                vm = glm::rotate(vm, glm::radians(-4.f),  glm::vec3(1,0,0));  // barrel tipped up
+                icRaygun.renderMatrix(proj * view, vm, sunDir,
+                                      worldSettings.fog_density, player.camera.position);
+                if (icHand.loaded())
+                    icHand.renderMatrix(proj * view, vm, sunDir,
+                                        worldSettings.fog_density, player.camera.position);
+            } else if (gameCfg.factory && raygunModel.loaded()) {
                 glm::mat4 rm = glm::rotate(gm, -glm::half_pi<float>(), glm::vec3(0,1,0));
                 raygunModel.renderMatrix(proj * view, rm, sunDir,
                                          worldSettings.fog_density, player.camera.position);
@@ -1246,11 +1273,47 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Iron Command: animated wizard hand as the first-person build tool
-        // (left side of the view). Build-menu open/loop/close drives it:
+        // Iron Command build tool: the Fabricator in the left glove. It rises
+        // into view in build mode and drops away after; its gyroscope rings
+        // spin about the barrel (faster while building) and it kicks on a click.
+        // Same frame as the ray gun, mirrored to the left of the view.
+        if (gameCfg.factory && !thirdPerson && !player.inVehicle && icFab.loaded()) {
+            static float raise = 0.f, spin = 0.f, kick = 0.f;
+            static bool  lmbWas = false;
+            bool bm  = factory.buildMode && factory.phase == Factory::P_PLAY;
+            bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            if (bm && lmb && !lmbWas && !factory.menuOpen && !factory.commandMapOpen()) kick = 1.f;
+            lmbWas = lmb;
+            raise = glm::clamp(raise + (bm ? dt : -dt) / 0.22f, 0.f, 1.f);
+            spin += dt * (bm ? 7.f : 1.5f);
+            kick  = std::max(0.f, kick - dt * 6.f);
+            if (raise > 0.001f) {
+                float e = raise * raise * (3.f - 2.f * raise);          // smoothstep
+                glClear(GL_DEPTH_BUFFER_BIT);
+                glm::vec3 f = player.camera.forward();
+                glm::vec3 r = player.camera.right();
+                glm::vec3 u = player.camera.up();
+                glm::vec3 vp = player.camera.position + f*(0.40f - 0.03f*kick) - r*0.20f
+                             - u*(0.155f + (1.f - e)*0.35f);
+                glm::mat4 vm(glm::vec4(-r, 0), glm::vec4(u, 0), glm::vec4(f, 0), glm::vec4(vp, 1));
+                vm = glm::rotate(vm, glm::radians(10.f), glm::vec3(0,1,0));              // turned out (left)
+                vm = glm::rotate(vm, glm::radians(-4.f - 8.f*kick), glm::vec3(1,0,0));  // tipped up, kicks
+                icFab.renderMatrix(proj * view, vm, sunDir, worldSettings.fog_density, player.camera.position);
+                if (icHandL.loaded())
+                    icHandL.renderMatrix(proj * view, vm, sunDir, worldSettings.fog_density, player.camera.position);
+                if (icFabRings.loaded()) {   // spin about the barrel axis (y=0.05 above the grip)
+                    glm::vec3 axis(0.f, 0.05f, 0.f);
+                    glm::mat4 rm = glm::translate(vm, axis) * glm::rotate(glm::mat4(1.f), spin, glm::vec3(0,0,1))
+                                 * glm::translate(glm::mat4(1.f), -axis);
+                    icFabRings.renderMatrix(proj * view, rm, sunDir, worldSettings.fog_density, player.camera.position);
+                }
+            }
+        }
+        // Fallback build tool: the animated wizard hand (if the Fabricator
+        // isn't installed). Build-menu open/loop/close drives it:
         //   open  → play 0..frame70 once, then loop 22..70 while building;
         //   close → play frame70..end once, then rest.
-        if (gameCfg.factory && !thirdPerson && wizardHand.loaded()) {
+        else if (gameCfg.factory && !thirdPerson && wizardHand.loaded()) {
             const float T22 = 22.f/24.f, T70 = 70.f/24.f;
             float Tend = wizardHand.duration();
             static int  handPhase = -1;      // -1 uninit, 0 rest,1 open,2 loop,3 close

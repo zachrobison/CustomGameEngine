@@ -9,3 +9,6 @@ build/
 .vscode/
 .idea/
 *.swp
+*.blend1
+__pycache__/
+*.pyc

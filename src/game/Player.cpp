@@ -201,7 +201,7 @@ void Player::update(GLFWwindow* window, World& world, EntityManager& entities,
 
         if (!ws.voxelWorld) {
             float groundY = (ws.flatTerrain || ws.customMeshPath[0] != '\0')
-                          ? 20.f : meshTerrainY(pos.x, pos.z);
+                          ? (groundAt ? groundAt(pos.x, pos.z) : 20.f) : meshTerrainY(pos.x, pos.z);
             float seatY = groundY + 1.2f;
             if (pos.y <= seatY) { pos.y = seatY; velocity.y = 0.f; onGround = true; }
             else onGround = false;
@@ -381,9 +381,9 @@ void Player::update(GLFWwindow* window, World& world, EntityManager& entities,
         else if (!tryStepUp(tryZ)) velocity.z = 0;
 
         if (!ws.voxelWorld) {
-            // Heightfield floor under everything (flat/custom = Y=20)
+            // Heightfield floor under everything (flat/custom = Y=20, or the game's hills)
             float groundY = (ws.flatTerrain || ws.customMeshPath[0] != '\0')
-                          ? 20.f
+                          ? (groundAt ? groundAt(pos.x, pos.z) : 20.f)
                           : meshTerrainY(pos.x, pos.z);
             float feetY = pos.y - 1.65f;
             // Stand on prop boxes: raise the ground to the highest box top

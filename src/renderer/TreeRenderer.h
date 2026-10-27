@@ -3,6 +3,7 @@
 #include "../gl_compat.h"
 #include <glm/glm.hpp>
 #include <vector>
+#include <functional>
 
 // Procedural low-poly trees scattered across the mesh terrain.
 // Parameters must match Terrain::generate() exactly.
@@ -12,8 +13,9 @@ public:
     ~TreeRenderer();
 
     // Rebuild the tree mesh at explicit positions (x,z; y = size hint),
-    // all sitting on ground plane `groundY`. Used by Iron Command.
-    void buildFrom(const std::vector<glm::vec3>& trees, float groundY);
+    // each planted at groundAt(x, z). Used by Iron Command.
+    void buildFrom(const std::vector<glm::vec3>& trees,
+                   const std::function<float(float, float)>& groundAt);
 
     void render(const glm::mat4& VP, glm::vec3 sunDir,
                 float fogDensity, glm::vec3 cameraPos);

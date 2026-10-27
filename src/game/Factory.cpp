@@ -137,6 +137,7 @@ void Factory::initCube(){
     glBindVertexArray(0);
 }
 Factory::~Factory(){ if(vao)glDeleteVertexArrays(1,&vao); if(vbo)glDeleteBuffers(1,&vbo);
+    if(gVao)glDeleteVertexArrays(1,&gVao); if(gVbo)glDeleteBuffers(1,&gVbo); if(gEbo)glDeleteBuffers(1,&gEbo);
     if(prog)glDeleteProgram(prog);
     if(texFloor)glDeleteTextures(1,&texFloor); if(texMetal)glDeleteTextures(1,&texMetal);
     if(texBelt)glDeleteTextures(1,&texBelt); }
@@ -159,6 +160,56 @@ void Factory::cube(const glm::mat4&VP,glm::vec3 c,glm::vec3 h,glm::vec3 col,
     glm::mat4 M=glm::translate(glm::mat4(1.f),c)*glm::scale(glm::mat4(1.f),h*2.f);
     drawModel(prog,VP,M,col,tex,uvRep,uvOff,alpha);
 }
+void Factory::cubeYaw(const glm::mat4&VP,glm::vec3 c,glm::vec3 h,float yaw,glm::vec3 col,
+                      GLuint tex,glm::vec2 uvRep,float pitch){
+    glm::mat4 M=glm::translate(glm::mat4(1.f),c)*glm::rotate(glm::mat4(1.f),yaw,glm::vec3(0,1,0))
+               *glm::rotate(glm::mat4(1.f),-pitch,glm::vec3(1,0,0))*glm::scale(glm::mat4(1.f),h*2.f);
+    drawModel(prog,VP,M,col,tex,uvRep,{0,0},1.f);
+}
+
+// ── Fence pencil / mine brush ──────────────────────────────────────────────
+static const float FENCE_SPAN = 3.f;     // max wall length between two posts
+bool Factory::placeFencePost(glm::vec2 p){
+    if(fenceChainOpen){
+        glm::vec2 e{fenceChainEnd.x,fenceChainEnd.z}; float L=glm::length(p-e);
+        if(L<0.75f) return true;                       // same spot as the last post
+        if(L>FENCE_SPAN){                              // fill the gap: every post joins up
+            int n=(int)std::ceil(L/FENCE_SPAN);
+            for(int i=1;i<n;i++) if(!placeFencePost(e+(p-e)*((float)i/n))) return false;
+        }
+    }
+    if(fenceBank<=0){ fenceChainOpen=false; return false; }
+    Deployable f{}; f.kind=DK_FENCE; f.pos={p.x,0.f,p.y}; f.walking=false;
+    f.linked=fenceChainOpen; f.linkPos=fenceChainEnd;
+    deploys.push_back(f); fenceBank--;
+    fenceChainEnd=f.pos; fenceChainOpen=true;
+    return true;
+}
+int Factory::paintMines(glm::vec2 c,float radius){
+    const float SP=4.f;                                // one mine per 4u grid cell
+    int placed=0;
+    for(float x=std::floor((c.x-radius)/SP)*SP; x<=c.x+radius; x+=SP)
+    for(float z=std::floor((c.y-radius)/SP)*SP; z<=c.y+radius; z+=SP){
+        if(mineBank<=0) return placed;
+        glm::vec2 q{x+SP*0.5f,z+SP*0.5f};
+        if(glm::length(q-c)>radius || std::abs(q.x)>mapHalf || std::abs(q.y)>mapHalf) continue;
+        bool taken=false;
+        for(auto&d:deploys) if(d.kind==DK_MINE && glm::length(glm::vec2(d.pos.x,d.pos.z)-q)<SP*0.9f){ taken=true; break; }
+        if(taken) continue;
+        Deployable m{}; m.kind=DK_MINE; m.pos={q.x,0.f,q.y}; m.walking=false;
+        deploys.push_back(m); mineBank--; placed++;
+    }
+    return placed;
+}
+void Factory::pushOutOfFences(glm::vec3& p,float rad) const{
+    const float HALF=0.25f;                            // wall half-thickness
+    for(auto&f:deploys){ if(f.kind!=DK_FENCE) continue;
+        glm::vec2 a{f.pos.x,f.pos.z}, b=f.linked?glm::vec2(f.linkPos.x,f.linkPos.z):a, q{p.x,p.z};
+        glm::vec2 ab=b-a; float t=glm::dot(ab,ab)>1e-6f? glm::clamp(glm::dot(q-a,ab)/glm::dot(ab,ab),0.f,1.f):0.f;
+        glm::vec2 aw=q-(a+ab*t); float dd=glm::length(aw), minD=HALF+rad;
+        if(dd<minD && dd>1e-3f){ glm::vec2 push=(aw/dd)*(minD-dd); p.x+=push.x; p.z+=push.y; }
+    }
+}
 
 glm::vec3 Factory::footprint(int type) const{
     switch(type){
@@ -174,7 +225,7 @@ glm::vec3 Factory::footprint(int type) const{
 }
 void Factory::drawMachine(const glm::mat4&VP,int type,glm::vec3 pos,float yaw,
                           glm::vec3 sun,float fog,glm::vec3 cam,float alpha){
-    (void)yaw; glm::vec3 b=pos+glm::vec3(0,GROUND,0); glm::vec2 rep{2,1};
+    (void)yaw; glm::vec3 fp=footprint(type); glm::vec3 b{pos.x,baseY(pos,fp.x,fp.z),pos.z}; glm::vec2 rep{2,1};
     switch(type){
         case MINER:
             cube(VP,b+glm::vec3(0,1.0f,0),{1.2f,1.0f,1.2f},{0.55f,0.42f,0.30f},sun,fog,cam,alpha,texMetal,rep);
@@ -241,38 +292,100 @@ int Factory::cellOf(float wx,float wz) const{
     return cz*gridN+cx;
 }
 
+// ── Terrain: rolling hills ─────────────────────────────────────────────────
+float Factory::hillRaw(float x,float z) const{
+    float h=0.f;
+    for(auto&H:hills){ float dx=x-H.c.x, dz=z-H.c.y;
+        float u=(dx*H.cs+dz*H.sn)/H.a, v=(-dx*H.sn+dz*H.cs)/H.b, r2=u*u+v*v;
+        if(r2<1.f){ float k=1.f-r2; h+=H.h*k*k; } }          // smooth, compact bump
+    if(h>6.f) h=6.f+(h-6.f)*0.35f;                             // overlaps swell, not spike
+    float edge=glm::clamp((mapHalf-std::max(std::abs(x),std::abs(z)))/40.f,0.f,1.f);   // level rim
+    float home=glm::smoothstep(18.f,45.f,glm::length(glm::vec2(x,z)));                 // level start
+    return h*edge*home;
+}
+float Factory::heightAt(float x,float z) const{
+    if(hills.empty() || std::abs(x)>mapHalf || std::abs(z)>mapHalf) return GROUND;   // lobby etc.
+    float h=hillRaw(x,z);
+    for(auto&n:nodes){ float d=glm::length(glm::vec2(x-n.pos.x,z-n.pos.z)), R=n.r+6.f;   // ore pads
+        if(d<R) h=glm::mix(h,n.pos.y-GROUND,1.f-glm::smoothstep(n.r+0.5f,R,d)); }
+    return GROUND+h;
+}
+float Factory::baseY(glm::vec3 p,float hx,float hz) const{
+    float y=heightAt(p.x,p.z);    // lowest corner: buildings dig into the uphill side, never float
+    for(int sx=-1;sx<=1;sx+=2) for(int sz=-1;sz<=1;sz+=2) y=std::min(y,heightAt(p.x+sx*hx,p.z+sz*hz));
+    return y;
+}
+void Factory::buildGround(){
+    const int N=(int)std::ceil(2.f*mapHalf/3.f); const float st=2.f*mapHalf/N;   // ~3u cells
+    std::vector<float> H((size_t)(N+1)*(N+1));
+    for(int z=0;z<=N;z++) for(int x=0;x<=N;x++) H[(size_t)z*(N+1)+x]=heightAt(-mapHalf+x*st,-mapHalf+z*st);
+    auto at=[&](int x,int z){ x=glm::clamp(x,0,N); z=glm::clamp(z,0,N); return H[(size_t)z*(N+1)+x]; };
+    struct Vx{float p[3],n[3],uv[2];}; std::vector<Vx> vs; vs.reserve((size_t)(N+1)*(N+1));
+    for(int z=0;z<=N;z++) for(int x=0;x<=N;x++){ float wx=-mapHalf+x*st, wz=-mapHalf+z*st;
+        glm::vec3 n=glm::normalize(glm::vec3(at(x-1,z)-at(x+1,z),2.f*st,at(x,z-1)-at(x,z+1)));
+        vs.push_back({{wx,at(x,z),wz},{n.x,n.y,n.z},{wx/5.f,wz/5.f}}); }
+    std::vector<uint32_t> ix; ix.reserve((size_t)N*N*6);
+    for(int z=0;z<N;z++) for(int x=0;x<N;x++){ uint32_t a=z*(N+1)+x, b=a+1, c=a+(N+1), d=c+1;
+        ix.insert(ix.end(),{a,c,b, b,c,d}); }                  // CCW seen from above
+    if(!gVao){ glGenVertexArrays(1,&gVao); glGenBuffers(1,&gVbo); glGenBuffers(1,&gEbo); }
+    glBindVertexArray(gVao);
+    glBindBuffer(GL_ARRAY_BUFFER,gVbo); glBufferData(GL_ARRAY_BUFFER,vs.size()*sizeof(Vx),vs.data(),GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,gEbo); glBufferData(GL_ELEMENT_ARRAY_BUFFER,ix.size()*4,ix.data(),GL_STATIC_DRAW);
+    glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(Vx),(void*)0);
+    glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,sizeof(Vx),(void*)(3*sizeof(float)));
+    glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,sizeof(Vx),(void*)(6*sizeof(float)));
+    glEnableVertexAttribArray(0);glEnableVertexAttribArray(1);glEnableVertexAttribArray(2);
+    glBindVertexArray(0); gIdx=(int)ix.size();
+}
+// Belt polyline draped over the hills: segments split to <=3u, each node on the ground.
+static std::vector<glm::vec3> drape(const std::vector<glm::vec3>& in,const Factory& f,float lift){
+    std::vector<glm::vec3> out;
+    for(size_t i=0;i<in.size();i++){
+        if(i){ glm::vec3 a=in[i-1], b=in[i]; float L=glm::length(glm::vec2(b.x-a.x,b.z-a.z));
+            int n=(int)std::ceil(L/3.f);
+            for(int k=1;k<n;k++){ glm::vec3 p=glm::mix(a,b,(float)k/n); out.push_back({p.x,f.heightAt(p.x,p.z)+lift,p.z}); } }
+        out.push_back({in[i].x,f.heightAt(in[i].x,in[i].z)+lift,in[i].z}); }
+    return out;
+}
+
 void Factory::reset(unsigned seed){
     if(!prog){ initCube(); initTextures(); }
-    machines.clear(); belts.clear(); nodes.clear(); deploys.clear();
+    machines.clear(); belts.clear(); deploys.clear();
     enemies.clear(); tracers.clear(); enemySpawnCd=10.f;
-    ebasePos={mapHalf*0.7f,0.f,mapHalf*0.7f};   // opposite the player start
-    ebaseHp=ebaseMax; ebaseAlive=!netActive; won=false; lost=false;  // net: real players replace the AI base
+    ebasePos={mapHalf*0.7f,0.f,mapHalf*0.7f};
+    ebaseHp=ebaseMax; ebaseAlive=false; won=false; lost=false;   // no AI enemy base — PvP only
     aiEconomy=0.f; gameClock=0.f; enemySpawnCd=6.f;
-    opps.clear(); everSawOpp=false; netSendCd=0.f;
-    hubAlive=false; cmdMapOpen=false; fenceBank=0; mineBank=0; turretBank=0; hubBrush=0; // hub is placed on drop
+    opps.clear(); everSawOpp=false; netSendCd=0.f; seedSendCd=0.f; mapSynced=false;
+    hubAlive=false; cmdMapOpen=false; fenceBank=0; mineBank=0; turretBank=0; hubBrush=0; fenceChainOpen=false; // hub is placed on drop
     active=true; buildMode=false; selType=0; ghostYaw=0.f; pendingSrc=-1; aimedMachine=-1;
     beltPts.clear();
     menuOpen=false; mapMode=false; pendingRecipe=-1; menuMachine=-1; deployTarget=-1;
     gridN=(int)(mapHalf*2.f/CELL);
     explored.assign((size_t)gridN*gridN, 0);
-    // Reveal the enemy base so you always know where the objective is
-    { int R=(int)(10.f/CELL);
-      int bx=(int)((ebasePos.x+mapHalf)/CELL), bz=(int)((ebasePos.z+mapHalf)/CELL);
-      for(int dz=-R;dz<=R;dz++)for(int dx=-R;dx<=R;dx++){ int cx=bx+dx,cz=bz+dz;
-        if(cx>=0&&cz>=0&&cx<gridN&&cz<gridN) explored[cz*gridN+cx]=1; } }
-    std::mt19937 rng(seed?seed:1234u);
-    std::uniform_real_distribution<float> U(-mapHalf+14.f,mapHalf-14.f);
-    trees.clear();
+    genMap(seed);
+    phase=P_MODE; multiplayer=false; dropReady=false; lobbyEnter=true; lobbyNearTable=false;
+}
+
+// The battlefield from a seed: ore, forests, trees, hills. In a LAN match the
+// host's seed is sent to everyone, so all players stand on the same map.
+// Only mt19937's raw output is used — the std:: distributions differ between
+// Mac and Windows standard libraries, which would split the map per platform.
+void Factory::genMap(unsigned seed){
+    mapSeed=seed?seed:1234u;
+    nodes.clear(); trees.clear(); hills.clear();
+    std::mt19937 rng(mapSeed);
+    auto r01=[](std::mt19937& g){ return (float)((double)g()/4294967296.0); };
+    auto U=[&](){ return -mapHalf+14.f+r01(rng)*(2.f*mapHalf-28.f); };
     int n=36+rng()%22;   // ore nodes scale with the bigger map
-    for(int i=0;i<n;i++){ float x=std::round(U(rng)/GRID)*GRID, z=std::round(U(rng)/GRID)*GRID;
+    for(int i=0;i<n;i++){ float x=std::round(U()/GRID)*GRID; float z=std::round(U()/GRID)*GRID;
         nodes.push_back({{x,GROUND,z}, 3.5f}); }
     // ── Biome layout: forests (dense trees) + plains (open) + passageways ──
     std::vector<glm::vec3> forests;   // x, radius(y), z
     int nf=5+rng()%4;
-    for(int i=0;i<nf;i++){ forests.push_back({U(rng), 34.f+(rng()%42), U(rng)}); }
+    for(int i=0;i<nf;i++){ float x=U(); float r=34.f+(rng()%42); float z=U(); forests.push_back({x,r,z}); }
     std::vector<glm::vec4> paths;      // ax,az,bx,bz — clear corridors through forests
     int np=3+rng()%3;
-    for(int i=0;i<np;i++) paths.push_back({U(rng),U(rng),U(rng),U(rng)});
+    for(int i=0;i<np;i++){ float ax=U(); float az=U(); float bx=U(); float bz=U(); paths.push_back({ax,az,bx,bz}); }
     const float PATH_W=9.f;
     auto distSeg=[&](float px,float pz,glm::vec4 s)->float{
         glm::vec2 a{s.x,s.y},b{s.z,s.w},p{px,pz},ab=b-a; float L2=glm::dot(ab,ab);
@@ -281,7 +394,7 @@ void Factory::reset(unsigned seed){
     auto rnd=[&](){ return (float)(rng()%10000)/10000.f; };
     int cap=700, tries=0;
     while((int)trees.size()<cap && tries<24000){ tries++;
-        float x=U(rng), z=U(rng);
+        float x=U(); float z=U();
         // Inside a forest? Denser toward the centre, thinning at the edge, so
         // forests read as real woods with soft boundaries.
         float dens=-1.f;
@@ -292,14 +405,24 @@ void Factory::reset(unsigned seed){
         bool onPath=false; for(auto&p:paths) if(distSeg(x,z,p)<PATH_W){ onPath=true; break; }
         if(onPath) continue;                                           // keep passageways clear
         if(glm::length(glm::vec2(x,z))<24.f) continue;                 // player start
-        if(glm::length(glm::vec2(x-ebasePos.x,z-ebasePos.z))<30.f) continue; // enemy base
         bool clash=false;
         for(auto&nd:nodes) if(glm::length(glm::vec2(x-nd.pos.x,z-nd.pos.z))<5.f){ clash=true; break; }
         for(auto&t:trees) if(glm::length(glm::vec2(x-t.x,z-t.z))<1.6f){ clash=true; break; } // min spacing
         if(clash) continue;
         trees.push_back({x, 1.5f+(rng()%18)/10.f, z}); }
+    // ── Rolling hills: soft bumps plus some long ridges that break sightlines ──
+    { std::mt19937 hr(mapSeed^0x9E3779B9u);
+      auto HU=[&](){ return -mapHalf+40.f+r01(hr)*(2.f*mapHalf-80.f); };
+      int nh=55+hr()%15;
+      for(int i=0;i<nh;i++){ Hill H; float cx=HU(); float cz=HU(); H.c={cx,cz}; H.a=35.f+r01(hr)*55.f;
+          bool ridge=r01(hr)<0.35f;                                          // ~1 in 3 is a long ridge
+          H.b=H.a*(ridge? 0.45f+r01(hr)*0.15f : 0.6f+r01(hr)*0.4f);
+          float ang=r01(hr)*3.14159f; H.cs=std::cos(ang); H.sn=std::sin(ang);
+          H.h=(2.f+r01(hr)*4.5f)*(ridge?0.7f:1.f); hills.push_back(H); } }
+    for(auto&nd:nodes) nd.pos.y=GROUND+hillRaw(nd.pos.x,nd.pos.z);   // ore sits on a level pad
+    buildGround();
     syncCollision();
-    phase=P_MODE; multiplayer=false; dropReady=false; lobbyEnter=true; lobbyNearTable=false;
+    mapDirty=true;   // main rebuilds the tree mesh
 }
 
 int Factory::outItem(const Machine& m) const { return mrec(m.type,m.recipe).out; }
@@ -313,9 +436,14 @@ void Factory::cycleType(int d){ selType=(selType+d+TOOL_N)%TOOL_N; pendingSrc=-1
 void Factory::rotateGhost(){ ghostYaw+=1.5707963f; }
 
 bool Factory::rayGround(glm::vec3 ro,glm::vec3 rd,glm::vec3&out) const{
-    if(std::abs(rd.y)<1e-5f) return false;
-    float t=(GROUND-ro.y)/rd.y; if(t<0.f||t>70.f) return false;
-    out=ro+rd*t; return true;
+    float prev=0.f;                          // march the hills, then bisect the crossing
+    for(float t=0.5f;t<=70.f;t+=0.5f){ glm::vec3 p=ro+rd*t;
+        if(p.y<=heightAt(p.x,p.z)){ float lo=prev,hi=t;
+            for(int i=0;i<8;i++){ float m=(lo+hi)*0.5f; glm::vec3 q=ro+rd*m;
+                if(q.y<=heightAt(q.x,q.z)) hi=m; else lo=m; }
+            out=ro+rd*hi; return true; }
+        prev=t; }
+    return false;
 }
 bool Factory::nodeAt(glm::vec3 p) const{
     for(auto&n:nodes){ glm::vec2 d{p.x-n.pos.x,p.z-n.pos.z}; if(glm::length(d)<n.r) return true; }
@@ -357,15 +485,25 @@ void Factory::syncCollision(){
     if(!collider) return;
     collider->clear();
     for(auto&m:machines){ glm::vec3 h=footprint(m.type);
-        collider->addBox({m.pos.x-h.x, GROUND, m.pos.z-h.z},
-                         {m.pos.x+h.x, GROUND+h.y, m.pos.z+h.z}, {0.4f,0.4f,0.4f}, false);
+        float by=baseY(m.pos,h.x,h.z);
+        collider->addBox({m.pos.x-h.x, by, m.pos.z-h.z},
+                         {m.pos.x+h.x, by+h.y, m.pos.z+h.z}, {0.4f,0.4f,0.4f}, false);
     }
     for(auto&t:trees)   // trunks block the player
-        collider->addBox({t.x-0.4f, GROUND, t.z-0.4f},{t.x+0.4f, GROUND+3.f, t.z+0.4f},{0.3f,0.2f,0.1f}, false);
+    { float ty=heightAt(t.x,t.z);
+        collider->addBox({t.x-0.4f, ty-0.5f, t.z-0.4f},{t.x+0.4f, ty+3.f, t.z+0.4f},{0.3f,0.2f,0.1f}, false); }
     if(hubAlive)        // the hub is a solid structure too
-        collider->addBox({hubPos.x-4.f, GROUND, hubPos.z-4.f},{hubPos.x+4.f, GROUND+5.f, hubPos.z+4.f},{0.4f,0.4f,0.5f}, false);
-    for(auto&d:deploys) if(d.kind==DK_FENCE)   // fence walls block the player as well
-        collider->addBox({d.pos.x-1.3f, GROUND, d.pos.z-0.35f},{d.pos.x+1.3f, GROUND+2.2f, d.pos.z+0.35f},{0.35f,0.37f,0.4f}, false);
+    { float hy=baseY(hubPos,4.f,4.f);
+        collider->addBox({hubPos.x-4.f, hy, hubPos.z-4.f},{hubPos.x+4.f, hy+5.f, hubPos.z+4.f},{0.4f,0.4f,0.5f}, false); }
+    for(auto&d:deploys) if(d.kind==DK_FENCE){  // fence posts + walls block the player as well
+        { float fy=heightAt(d.pos.x,d.pos.z);
+          collider->addBox({d.pos.x-0.3f, fy-0.5f, d.pos.z-0.3f},{d.pos.x+0.3f, fy+2.2f, d.pos.z+0.3f},{0.35f,0.37f,0.4f}, false); }
+        if(!d.linked) continue;                // a wall at any angle = a run of small boxes
+        glm::vec3 ab=d.linkPos-d.pos; int n=std::max(1,(int)std::ceil(glm::length(ab)/0.5f));
+        for(int i=1;i<n;i++){ glm::vec3 c=d.pos+ab*((float)i/n);
+            float cy=heightAt(c.x,c.z);
+            collider->addBox({c.x-0.3f, cy-0.5f, c.z-0.3f},{c.x+0.3f, cy+2.2f, c.z+0.3f},{0.35f,0.37f,0.4f}, false); }
+    }
     collider->buildMesh();
 }
 
@@ -386,14 +524,17 @@ static void putU(std::vector<uint8_t>& b,unsigned u){ for(int i=0;i<4;i++) b.pus
 static float getF(const uint8_t* p){ float f; memcpy(&f,p,4); return f; }
 static unsigned getU(const uint8_t* p){ return (unsigned)p[0]|((unsigned)p[1]<<8)|((unsigned)p[2]<<16)|((unsigned)p[3]<<24); }
 
-void Factory::netTick(float dt){
-    if(!netActive) return;
-    net.poll();
-    // Drain inbound messages. 'S' = a player's snapshot, 'D' = damage to a hub.
+// Drain inbound messages: 'S' a player's snapshot, 'D' damage to a hub,
+// 'K' a mine blast, 'M' the host's map seed. Runs in the front-end too, so a
+// joiner learns the map (and where rivals' hubs are) before they drop.
+void Factory::netRecv(){
     std::vector<uint8_t> msg;
     while(net.recv(msg)){
         if(msg.empty()) continue;
-        if(msg[0]=='S' && msg.size()>=1+4+4+1+8+2){
+        if(msg[0]=='M' && msg.size()>=1+4){
+            unsigned sd=getU(&msg[1]);
+            if(!net.isHost() && phase!=P_PLAY){ if(sd!=mapSeed) genMap(sd); mapSynced=true; }
+        } else if(msg[0]=='S' && msg.size()>=1+4+4+1+8+2){
             size_t i=1;
             unsigned id=getU(&msg[i]); i+=4;
             if(id==myId) continue;                      // ignore echoes of myself
@@ -402,17 +543,39 @@ void Factory::netTick(float dt){
             glm::vec3 hub{ getF(&msg[i]),0.f,getF(&msg[i+4]) }; i+=8;
             unsigned n=(unsigned)(msg[i]|(msg[i+1]<<8)); i+=2;
             Opp* o=findOpp(id);
-            if(!o){ opps.push_back(Opp{id,hub,hp,alive,{},0.f,gameClock}); o=&opps.back(); everSawOpp=true; }
-            o->hub=hub; o->hp=hp; o->alive=alive; o->lastSeen=gameClock;
+            if(!o){ opps.push_back(Opp{id,hub,hp,alive,{},0.f,netClock}); o=&opps.back(); everSawOpp=true; }
+            o->hub=hub; o->hp=hp; o->alive=alive; o->lastSeen=netClock;
             o->units.clear();
             for(unsigned k=0;k<n && i+8<=msg.size();k++){ o->units.push_back({getF(&msg[i]),getF(&msg[i+4])}); i+=8; }
             // trailing avatar: x, z, yaw (their player character)
-            if(i+12<=msg.size()){ o->avatarPos={getF(&msg[i]),GROUND,getF(&msg[i+4])}; o->avatarYaw=getF(&msg[i+8]); i+=12; }
+            if(i+12<=msg.size()){ { float ax=getF(&msg[i]), az=getF(&msg[i+4]); o->avatarPos={ax,heightAt(ax,az),az}; } o->avatarYaw=getF(&msg[i+8]); i+=12; }
         } else if(msg[0]=='D' && msg.size()>=1+4+4){
             unsigned target=getU(&msg[1]); float amt=getF(&msg[5]);
             if(target==myId && hubAlive) hubHp-=amt;    // someone's robots hit my hub
+        } else if(msg[0]=='K' && msg.size()>=1+8){
+            // A peer's mine went off here — cull my robots caught in the blast.
+            glm::vec2 bp{getF(&msg[1]),getF(&msg[5])};
+            for(int k=(int)deploys.size()-1;k>=0;k--)
+                if(deploys[k].kind==DK_ROBOT && glm::length(glm::vec2(deploys[k].pos.x-bp.x,deploys[k].pos.z-bp.y))<5.f)
+                    deploys.erase(deploys.begin()+k);
         }
     }
+}
+
+// Every frame while networked (front-end and match).
+void Factory::netTick(float dt){
+    if(!netActive) return;
+    net.poll(); netClock+=dt;
+    netRecv();
+    // Host: announce the map seed ~1/s so every joiner (even a late one) builds the same map.
+    if(net.isHost()){ mapSynced=true; seedSendCd-=dt;
+        if(seedSendCd<=0.f && net.connected()){ seedSendCd=1.f;
+            std::vector<uint8_t> m; m.push_back('M'); putU(m,mapSeed); net.broadcast(m); } }
+    // A player we haven't heard from in a while has quit or dropped: remove their
+    // hub, robots and avatar (otherwise they linger forever and you can never win).
+    for(int k=(int)opps.size()-1;k>=0;k--) if(netClock-opps[k].lastSeen>8.f){
+        opps.erase(opps.begin()+k); rivalLeftT=5.f; }
+    if(phase!=P_PLAY) return;
     // Send my snapshot + any damage I dealt this window, ~15 Hz.
     netSendCd -= dt;
     if(netSendCd<=0.f && net.connected()){
@@ -431,6 +594,10 @@ void Factory::netTick(float dt){
             std::vector<uint8_t> dmsg; dmsg.push_back('D'); putU(dmsg,o.id); putF(dmsg,o.pendingDmg);
             net.broadcast(dmsg); o.pendingDmg=0.f;
         }
+        for(auto& bp:pendingKills){   // mine blasts → peers cull robots there
+            std::vector<uint8_t> km; km.push_back('K'); putF(km,bp.x); putF(km,bp.y); net.broadcast(km);
+        }
+        pendingKills.clear();
     }
     // Win check: outlived everyone (last hub standing).
     if(!lost && hubAlive && everSawOpp && !won){
@@ -457,14 +624,19 @@ void Factory::playerFire(glm::vec3 camPos, glm::vec3 camFwd){
         glm::vec3 oc=c-camPos; float t=glm::dot(oc,rd); if(t<0||t>best) return false;
         glm::vec3 p=camPos+rd*t; if(glm::length(p-c)>r) return false; outT=t; return true; };
     float t;
-    for(int i=0;i<(int)enemies.size();i++){ glm::vec3 c=enemies[i].pos+glm::vec3(0,GROUND+1.f,0);
+    { glm::vec3 hit; if(rayGround(camPos,rd,hit)) best=std::min(best,glm::length(hit-camPos)); }   // hills block shots
+    for(int i=0;i<(int)enemies.size();i++){ glm::vec3 c={enemies[i].pos.x,heightAt(enemies[i].pos.x,enemies[i].pos.z)+1.f,enemies[i].pos.z};
         if(rayHit(c,HITR,t)){ best=t; what=0; idx=i; } }
     for(int i=0;i<(int)opps.size();i++){ if(!opps[i].alive) continue;
-        glm::vec3 c=opps[i].hub+glm::vec3(0,GROUND+2.f,0);
+        glm::vec3 c={opps[i].hub.x,baseY(opps[i].hub,4.f,4.f)+2.f,opps[i].hub.z};
         if(rayHit(c,3.2f,t)){ best=t; what=2; idx=i; } }
-    if(!netActive && ebaseAlive){ glm::vec3 c=ebasePos+glm::vec3(0,GROUND+2.f,0);
+    if(!netActive && ebaseAlive){ glm::vec3 c={ebasePos.x,baseY(ebasePos,4.f,4.f)+2.f,ebasePos.z};
         if(rayHit(c,3.2f,t)){ best=t; what=3; idx=-1; } }
-    tracers.push_back({camPos, camPos + rd*best, 0.08f, true});
+    // Beam starts at the ray-gun muzzle (bottom-right of view), not the eye.
+    glm::vec3 wup{0,1,0};
+    glm::vec3 right = glm::normalize(glm::cross(rd, wup));
+    glm::vec3 muzzle = camPos + rd*0.65f + right*0.245f - wup*0.09f;   // the view model's glowing tip
+    tracers.push_back({muzzle, camPos + rd*best, 0.08f, true});
     Audio::get().play("laser",0.4f,1.25f);
     const float DMG=34.f;
     if(what==0)      enemies[idx].hp-=DMG;
@@ -476,7 +648,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
                      bool placeEdge,bool deleteEdge,bool interactEdge,
                      float* playerHp){
     if(!active) return; (void)now;
-    if(netActive && phase!=P_PLAY) net.poll();   // accept the client / stay live in the front-end
+    if(netActive && phase!=P_PLAY) netTick(dt);  // accept joiners, sync the map, track rivals
     if(phase==P_LOBBY){          // walkable staging room
         glm::vec3 c=lobbyCenter();
         float dx=camPos.x-c.x, dz=camPos.z-c.z;
@@ -604,14 +776,14 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         }
     }
     // ── Combat ────────────────────────────────────────────────────────────
-    const float ROBOT_SPD=5.f, R_RANGE=12.f, T_RANGE=16.f;
+    const float ROBOT_SPD=5.f, R_RANGE=22.f, T_RANGE=18.f;   // bigger robot aggro zone
     auto nearestEnemy=[&](glm::vec3 p,float range)->int{
         int best=-1; float bd=range;
         for(int i=0;i<(int)enemies.size();i++){ float d=glm::length(
             glm::vec2(enemies[i].pos.x-p.x,enemies[i].pos.z-p.z)); if(d<bd){bd=d;best=i;} }
         return best; };
     auto shoot=[&](glm::vec3 from,glm::vec3 to,bool friendly){
-        tracers.push_back({from+glm::vec3(0,1.1f,0),to+glm::vec3(0,1.1f,0),0.09f,friendly});
+        tracers.push_back({{from.x,heightAt(from.x,from.z)+1.1f,from.z},{to.x,heightAt(to.x,to.z)+1.1f,to.z},0.09f,friendly});
         Audio::get().play("laser",0.3f,friendly?1.1f:0.7f); };
 
     // Hostile bases the robots fight: the single AI base offline, or every live
@@ -629,7 +801,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         if(d.kind==DK_ROBOT){
             // Advance on the ordered point; home on the nearest enemy near it,
             // or the nearest hostile hub if commanded there — never stop to fight.
-            glm::vec3 mt=d.goal; int nearG=nearestEnemy(d.goal,20.f);
+            glm::vec3 mt=d.goal; int nearG=nearestEnemy(d.goal,40.f);   // seek enemies from farther
             int nbG = nearG<0 ? nearestBase(d.goal,16.f) : -1;
             if(nearG>=0) mt=enemies[nearG].pos;
             else if(nbG>=0) mt=hbases[nbG].pos;
@@ -652,9 +824,16 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
             int t=nearestEnemy(d.pos,T_RANGE);
             if(t>=0 && d.fireCd<=0.f){ enemies[t].hp-=16.f; d.fireCd=0.45f; shoot(d.pos,enemies[t].pos,true); }
         } else if(d.kind==DK_MINE){
-            int t=nearestEnemy(d.pos,3.2f);            // tripped when a robot steps near
-            if(t>=0){ for(auto&e:enemies) if(glm::length(glm::vec2(e.pos.x-d.pos.x,e.pos.z-d.pos.z))<5.f) e.hp-=90.f;
-                Audio::get().play("explosion",0.7f); d.hp=-1.f; }   // blows up + consumed
+            // Trips for ANY hostile robot — AI enemies or an opponent's robots —
+            // but never the deployer's own units.
+            glm::vec2 mp{d.pos.x,d.pos.z};
+            bool trip = (nearestEnemy(d.pos,3.2f)>=0);
+            if(!trip) for(auto&o:opps){ for(auto&u:o.units) if(glm::length(u-mp)<3.2f){ trip=true; break; } if(trip)break; }
+            if(trip){
+                for(auto&e:enemies) if(glm::length(glm::vec2(e.pos.x-mp.x,e.pos.z-mp.y))<5.f) e.hp-=90.f;
+                if(netActive) pendingKills.push_back(mp);   // ask peers to cull robots at the blast
+                Audio::get().play("explosion",0.7f); d.hp=-1.f;
+            }
         } else if(d.kind==DK_TRIPWIRE){
             int t=nearestEnemy(d.pos,1.8f);
             if(t>=0){ enemies[t].hp-=30.f; Audio::get().play("crash",0.4f,1.4f); d.hp=-1.f; }
@@ -679,9 +858,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         for(auto&m:machines){ glm::vec3 h=footprint(m.type);
             glm::vec2 aw{d.pos.x-m.pos.x,d.pos.z-m.pos.z}; float dd=glm::length(aw);
             float minD=std::max(h.x,h.z)+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } }
-        for(auto&f:deploys){ if(f.kind!=DK_FENCE) continue;   // fences are walls that block robots
-            glm::vec2 aw{d.pos.x-f.pos.x,d.pos.z-f.pos.z}; float dd=glm::length(aw);
-            float minD=1.3f+R_RAD; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); d.pos.x+=p.x; d.pos.z+=p.y; } } }
+        pushOutOfFences(d.pos,R_RAD); }   // fences are walls that block robots
 
     // Keep enemies from stacking on top of each other (soft separation).
     { const float E_RAD=0.7f;
@@ -714,9 +891,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         glm::vec3 mt = tgt==0? pfeet : tgt==1? deploys[bestD].pos : tgt==2? machines[bestM].pos : base;
         glm::vec2 to{mt.x-e.pos.x,mt.z-e.pos.z}; float dist=glm::length(to);
         if(dist>2.2f){ glm::vec2 dir=avoid(e.pos,to/dist); e.pos.x+=dir.x*3.2f*dt; e.pos.z+=dir.y*3.2f*dt; }
-        for(auto&f:deploys){ if(f.kind!=DK_FENCE) continue;   // fence walls stop the advance
-            glm::vec2 aw{e.pos.x-f.pos.x,e.pos.z-f.pos.z}; float dd=glm::length(aw);
-            float minD=1.6f; if(dd<minD&&dd>1e-3f){ glm::vec2 p=(aw/dd)*(minD-dd); e.pos.x+=p.x; e.pos.z+=p.y; } }
+        pushOutOfFences(e.pos,0.7f);   // fence walls stop the advance
         if(e.fireCd<=0.f){
             if(tgt==0 && pd<11.f && playerHp){ *playerHp-=8.f; e.fireCd=0.9f; shoot(e.pos,pfeet+glm::vec3(0,0.6f,0),false); }
             else if(tgt==1 && bd<11.f){ deploys[bestD].hp-=10.f; e.fireCd=0.9f; shoot(e.pos,deploys[bestD].pos,false); }
@@ -746,6 +921,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
     // "economy" grows, sending larger, more frequent waves the longer the
     // match runs. (A networked opponent would replace this with real orders.)
     gameClock += dt;
+    if(rivalLeftT>0.f) rivalLeftT-=dt;
     if(!netActive && ebaseAlive && gameClock >= peaceTime){   // real peer replaces the AI in net matches
         aiEconomy += dt;
         enemySpawnCd -= dt;
@@ -767,7 +943,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
         if(b.from>=(int)machines.size()||b.to>=(int)machines.size()) continue;
         Machine&src=machines[b.from]; Machine&dst=machines[b.to];
         if(b.item<0){ b.prog.clear(); continue; }
-        auto nodes=beltNodes(mpos,b.from,b.to,b.pts,GROUND+0.35f);
+        auto nodes=drape(beltNodes(mpos,b.from,b.to,b.pts,0.f),*this,0.35f);
         float total; posAlong(nodes,0.f,&total);
         float rate = total>0.1f ? BELT_SPEED/total : 1.f;
         for(auto&p:b.prog) p+=rate*dt;
@@ -785,6 +961,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
 
 void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,double now){
     if(!active||!prog) return;
+    lastVP=VP;   // the HUD projects rival-hub markers with it
     glUseProgram(prog);
     glUniform3fv(glGetUniformLocation(prog,"uSun"),1,glm::value_ptr(sun));
     glUniform1f(glGetUniformLocation(prog,"uFog"),fog);
@@ -810,21 +987,35 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
         return;
     }
 
-    cube(VP,{0,GROUND-0.5f,0},{mapHalf,0.5f,mapHalf},{1.f,1.f,1.f},sun,fog,cam,1.f,texFloor,{mapHalf*0.4f,mapHalf*0.4f});
+    if(gVao){                       // the hilly battlefield floor
+        glm::mat4 I(1.f);
+        glUniformMatrix4fv(glGetUniformLocation(prog,"uMVP"),1,0,glm::value_ptr(VP));
+        glUniformMatrix4fv(glGetUniformLocation(prog,"uModel"),1,0,glm::value_ptr(I));
+        glUniform3f(glGetUniformLocation(prog,"uColor"),1.f,1.f,1.f);
+        glUniform1f(glGetUniformLocation(prog,"uAlpha"),1.f);
+        glUniform2f(glGetUniformLocation(prog,"uUvRep"),1.f,1.f);
+        glUniform2f(glGetUniformLocation(prog,"uUvOff"),0.f,0.f);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D,texFloor);
+        glUniform1i(glGetUniformLocation(prog,"uTex"),0);
+        glBindVertexArray(gVao); glDrawElements(GL_TRIANGLES,gIdx,GL_UNSIGNED_INT,0);
+        glBindVertexArray(vao);
+    }
     for(auto&n:nodes)
-        cube(VP,{n.pos.x,GROUND+0.05f,n.pos.z},{n.r,0.06f,n.r},{0.25f,0.85f,0.8f},sun,fog,cam,1.f,texMetal,{2,2});
+        cube(VP,{n.pos.x,n.pos.y+0.05f,n.pos.z},{n.r,0.06f,n.r},{0.25f,0.85f,0.8f},sun,fog,cam,1.f,texMetal,{2,2});
     // Trees are drawn in main via the real OBJ model (see treeList()).
     {
         std::vector<glm::vec3> mpos; for(auto&m:machines) mpos.push_back(m.pos);
         for(auto&b:belts){
             if(b.from>=(int)machines.size()||b.to>=(int)machines.size()) continue;
-            auto nodes=beltNodes(mpos,b.from,b.to,b.pts,GROUND+0.35f);
+            auto nodes=drape(beltNodes(mpos,b.from,b.to,b.pts,0.f),*this,0.35f);
             for(size_t s=0;s+1<nodes.size();s++){
                 glm::vec3 A=nodes[s],B=nodes[s+1];
-                glm::vec3 d=B-A; float len=std::sqrt(d.x*d.x+d.z*d.z); if(len<0.3f) continue;
+                glm::vec3 d=B-A; float hl=std::sqrt(d.x*d.x+d.z*d.z); if(hl<0.3f) continue;
+                float len=glm::length(d), pitch=std::atan2(d.y,hl);   // belts tilt over the hills
                 glm::vec3 mid=(A+B)*0.5f; float ang=std::atan2(-d.z,d.x);
                 glm::mat4 M=glm::translate(glm::mat4(1.f),mid)*glm::rotate(glm::mat4(1.f),ang,glm::vec3(0,1,0))
-                          *glm::scale(glm::mat4(1.f),{len,0.14f,0.9f});
+                          *glm::rotate(glm::mat4(1.f),pitch,glm::vec3(0,0,1))
+                          *glm::scale(glm::mat4(1.f),{len+0.05f,0.14f,0.9f});
                 drawModel(prog,VP,M,{0.8f,0.8f,0.8f},texBelt,{len*0.5f,1.f},{(float)(-now*0.6),0.f},1.f);
             }
             // corner caps fill the wedge where two segments meet at an angle
@@ -837,16 +1028,17 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
     for(int i=0;i<(int)machines.size();i++){
         drawMachine(VP,machines[i].type,machines[i].pos,machines[i].yaw,sun,fog,cam,1.f);
         if(i==aimedMachine){  // highlight ring under the aimed machine
-            cube(VP,machines[i].pos+glm::vec3(0,GROUND+0.06f,0),{footprint(machines[i].type).x+0.3f,0.04f,footprint(machines[i].type).z+0.3f},
+            cube(VP,{machines[i].pos.x,heightAt(machines[i].pos.x,machines[i].pos.z)+0.06f,machines[i].pos.z},{footprint(machines[i].type).x+0.3f,0.04f,footprint(machines[i].type).z+0.3f},
                  {0.4f,1.f,0.7f},sun,fog,cam,1.f,texMetal,{1,1}); }
         if(machines[i].hasDeploy){  // deploy-point flag for this machine
             glm::vec3 dp=machines[i].deployPt;
-            cube(VP,{dp.x,GROUND+0.05f,dp.z},{0.5f,0.04f,0.5f},{0.9f,0.8f,0.3f},sun,fog,cam,1.f,texMetal,{1,1});
-            cube(VP,{dp.x,GROUND+0.9f,dp.z},{0.05f,0.9f,0.05f},{0.9f,0.8f,0.3f},sun,fog,cam,1.f,texMetal,{1,1});
+            float fy=heightAt(dp.x,dp.z);
+            cube(VP,{dp.x,fy+0.05f,dp.z},{0.5f,0.04f,0.5f},{0.9f,0.8f,0.3f},sun,fog,cam,1.f,texMetal,{1,1});
+            cube(VP,{dp.x,fy+0.9f,dp.z},{0.05f,0.9f,0.05f},{0.9f,0.8f,0.3f},sun,fog,cam,1.f,texMetal,{1,1});
         }
     }
     // Deployables: robots (walk), mines/fences/tripwires (static)
-    for(auto&d:deploys){ glm::vec3 b=d.pos+glm::vec3(0,GROUND,0);
+    for(auto&d:deploys){ glm::vec3 b{d.pos.x,heightAt(d.pos.x,d.pos.z),d.pos.z};
         switch(d.kind){
             case DK_ROBOT:
                 cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.6f,0.62f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
@@ -861,9 +1053,17 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
                 cube(VP,b+glm::vec3(0,1.0f,0),{0.3f,0.3f,0.3f},{0.6f,0.63f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
                 cube(VP,b+glm::vec3(0,1.05f,0.5f),{0.08f,0.08f,0.5f},{0.3f,0.32f,0.36f},sun,fog,cam,1.f,texMetal,{1,1});
                 break;
-            case DK_FENCE:   // a tall, belt-textured wall that blocks robots
-                cube(VP,b+glm::vec3(0,0.95f,0),{1.3f,0.95f,0.16f},{0.34f,0.36f,0.4f},sun,fog,cam,1.f,texBelt,{2,2});
-                cube(VP,b+glm::vec3(0,1.95f,0),{1.35f,0.12f,0.24f},{0.72f,0.68f,0.5f},sun,fog,cam,1.f,texMetal,{2,1});
+            case DK_FENCE:   // a post; linked posts get a tall belt-textured wall back to the previous one
+                cube(VP,b+glm::vec3(0,1.1f,0),{0.2f,1.1f,0.2f},{0.55f,0.58f,0.64f},sun,fog,cam,1.f,texMetal,{1,2});
+                cube(VP,b+glm::vec3(0,2.28f,0),{0.26f,0.1f,0.26f},{0.72f,0.68f,0.5f},sun,fog,cam,1.f,texMetal,{1,1});
+                if(d.linked){
+                    glm::vec3 e{d.linkPos.x,heightAt(d.linkPos.x,d.linkPos.z),d.linkPos.z}, ab=e-b;
+                    float L=glm::length(glm::vec2(ab.x,ab.z));
+                    if(L>0.05f){ float yaw=std::atan2(ab.x,ab.z), pitch=std::atan2(ab.y,L), S=glm::length(ab);
+                        glm::vec3 mid=b+ab*0.5f;
+                        cubeYaw(VP,mid+glm::vec3(0,0.95f,0),{0.12f,0.95f,S*0.5f},yaw,{0.34f,0.36f,0.4f},texBelt,{std::max(1.f,S*0.7f),2},pitch);
+                        cubeYaw(VP,mid+glm::vec3(0,1.95f,0),{0.18f,0.1f,S*0.5f},yaw,{0.72f,0.68f,0.5f},texMetal,{std::max(1.f,S*0.5f),1},pitch); }
+                }
                 break;
             case DK_TRIPWIRE:
                 cube(VP,b+glm::vec3(-1.f,0.4f,0),{0.06f,0.4f,0.06f},{0.7f,0.7f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
@@ -873,27 +1073,27 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
         }
     }
     // Your Hub (wizard-purple keep) — lose it and the match is over
-    if(hubAlive){ glm::vec3 b=hubPos+glm::vec3(0,GROUND,0); float f=hubHp/hubMax;
+    if(hubAlive){ glm::vec3 b{hubPos.x,baseY(hubPos,4.f,4.f),hubPos.z}; float f=hubHp/hubMax;
         cube(VP,b+glm::vec3(0,2.0f,0),{4.0f,2.0f,4.0f},{0.42f,0.34f,0.62f},sun,fog,cam,1.f,texMetal,{4,3});
         cube(VP,b+glm::vec3(0,4.2f,0),{2.4f,0.9f,2.4f},{0.55f,0.42f,0.8f},sun,fog,cam,1.f,texMetal,{2,2});
         cube(VP,b+glm::vec3(0,5.6f,0),{0.6f,0.8f,0.6f},{0.5f*f+0.4f,0.9f,1.0f},sun,fog,cam,1.f,texMetal,{1,1}); } // beacon dims as it takes damage
     // Enemy base (large red fortress) — the objective
-    if(ebaseAlive){ glm::vec3 b=ebasePos+glm::vec3(0,GROUND,0);
+    if(ebaseAlive){ glm::vec3 b{ebasePos.x,baseY(ebasePos,4.f,4.f),ebasePos.z};
         cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
         cube(VP,b+glm::vec3(0,3.8f,0),{2.2f,0.9f,2.2f},{0.7f,0.25f,0.22f},sun,fog,cam,1.f,texMetal,{2,2});
         cube(VP,b+glm::vec3(0,5.1f,0),{0.5f,0.6f,0.5f},{1.f,0.35f,0.25f},sun,fog,cam,1.f,texMetal,{1,1}); }
     // Enemy robots (red)
-    for(auto&e:enemies){ glm::vec3 b=e.pos+glm::vec3(0,GROUND,0);
+    for(auto&e:enemies){ glm::vec3 b{e.pos.x,heightAt(e.pos.x,e.pos.z),e.pos.z};
         cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.85f,0.3f,0.28f},sun,fog,cam,1.f,texMetal,{1,1});
         cube(VP,b+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.5f,0.4f},sun,fog,cam,1.f,texMetal,{1,1}); }
     // Opponents (net free-for-all): each rival hub is a red fortress, their
     // robots stream in as crimson contacts.
     for(auto& o:opps){ if(!o.alive) continue;
-        glm::vec3 b=o.hub+glm::vec3(0,GROUND,0);
+        glm::vec3 b{o.hub.x,baseY(o.hub,4.f,4.f),o.hub.z};
         cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
         cube(VP,b+glm::vec3(0,3.8f,0),{2.2f,0.9f,2.2f},{0.7f,0.25f,0.22f},sun,fog,cam,1.f,texMetal,{2,2});
         cube(VP,b+glm::vec3(0,5.1f,0),{0.5f,0.6f,0.5f},{1.f,0.35f,0.25f},sun,fog,cam,1.f,texMetal,{1,1});
-        for(auto&u:o.units){ glm::vec3 p={u.x,GROUND,u.y};
+        for(auto&u:o.units){ glm::vec3 p={u.x,heightAt(u.x,u.y),u.y};
             cube(VP,p+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.9f,0.15f,0.35f},sun,fog,cam,1.f,texMetal,{1,1});
             cube(VP,p+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.4f,0.6f},sun,fog,cam,1.f,texMetal,{1,1}); } }
     // Shot tracers (thin stretched box, colour by side)
@@ -906,7 +1106,7 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
     // Deploy-point targeting ghost
     if(deployTarget>=0){
         glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDepthMask(GL_FALSE);
-        cube(VP,ghostPos+glm::vec3(0,GROUND+0.5f,0),{0.6f,0.5f,0.6f},{0.9f,0.85f,0.3f},sun,fog,cam,0.45f,texMetal,{1,1});
+        cube(VP,{ghostPos.x,heightAt(ghostPos.x,ghostPos.z)+0.5f,ghostPos.z},{0.6f,0.5f,0.6f},{0.9f,0.85f,0.3f},sun,fog,cam,0.45f,texMetal,{1,1});
         glDepthMask(GL_TRUE);glDisable(GL_BLEND);
     }
     if(buildMode && !menuOpen && deployTarget<0){
@@ -916,9 +1116,10 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
             if(pendingSrc>=0 && pendingSrc<(int)machines.size()){
                 // preview the whole polyline: source → waypoints → aim
                 std::vector<glm::vec3> gh;
-                gh.push_back(machines[pendingSrc].pos+glm::vec3(0,GROUND+0.4f,0));
-                for(auto&p:beltPts) gh.push_back({p.x,GROUND+0.4f,p.z});
-                gh.push_back({ghostPos.x,GROUND+0.4f,ghostPos.z});
+                gh.push_back(machines[pendingSrc].pos);
+                for(auto&p:beltPts) gh.push_back(p);
+                gh.push_back(ghostPos);
+                gh=drape(gh,*this,0.4f);
                 for(size_t s=0;s+1<gh.size();s++){ glm::vec3 A=gh[s],B=gh[s+1];
                     glm::vec3 d=B-A; float len=std::sqrt(d.x*d.x+d.z*d.z); if(len<0.3f) continue;
                     glm::vec3 mid=(A+B)*0.5f; float ang=std::atan2(-d.z,d.x);
@@ -926,12 +1127,12 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
                         *glm::scale(glm::mat4(1.f),{len,0.1f,0.5f});
                     drawModel(prog,VP,M,{0.5f,0.9f,1.f},texBelt,{len*0.5f,1.f},{0,0},0.55f); }
                 for(auto&p:beltPts)   // corner markers
-                    cube(VP,{p.x,GROUND+0.4f,p.z},{0.22f,0.22f,0.22f},{0.6f,1.f,1.f},sun,fog,cam,0.6f,texMetal,{1,1});
+                    cube(VP,{p.x,heightAt(p.x,p.z)+0.4f,p.z},{0.22f,0.22f,0.22f},{0.6f,1.f,1.f},sun,fog,cam,0.6f,texMetal,{1,1});
             }
-            cube(VP,ghostPos+glm::vec3(0,GROUND+0.4f,0),{0.3f,0.3f,0.3f},tint,sun,fog,cam,0.5f,texMetal,{1,1});
+            cube(VP,{ghostPos.x,heightAt(ghostPos.x,ghostPos.z)+0.4f,ghostPos.z},{0.3f,0.3f,0.3f},tint,sun,fog,cam,0.5f,texMetal,{1,1});
         } else {
             glm::vec3 h=footprint(selType);
-            cube(VP,ghostPos+glm::vec3(0,GROUND+h.y*0.5f,0),{h.x,h.y*0.5f,h.z},tint,sun,fog,cam,0.4f,texMetal,{1,1});
+            cube(VP,{ghostPos.x,baseY(ghostPos,h.x,h.z)+h.y*0.5f,ghostPos.z},{h.x,h.y*0.5f,h.z},tint,sun,fog,cam,0.4f,texMetal,{1,1});
         }
         glDepthMask(GL_TRUE);glDisable(GL_BLEND);
     }
@@ -1025,36 +1226,40 @@ void Factory::renderHud(int winW,int winH){
         } else if(phase==P_DROP){
             float MS=440.f; ImGui::SetNextWindowSize({MS+30,MS+90});
             ImGui::Begin("DROP ZONE",nullptr,ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoMove);
-            ImGui::TextColored({1.f,0.9f,0.5f,1.f},"Select where to drop (min distance from enemy base)");
+            bool waitMap = netActive && !mapSynced;   // joiners drop only on the host's map
+            ImGui::TextColored({1.f,0.9f,0.5f,1.f},"%s", waitMap? "Syncing the host's map…"
+                               : netActive? "Select where to drop (keep clear of rival hubs)" : "Select where to drop");
             ImVec2 o=ImGui::GetCursorScreenPos(); ImDrawList* d=ImGui::GetWindowDrawList();
             auto w2m=[&](float wx,float wz){ return ImVec2(o.x+(wx+mapHalf)/(2*mapHalf)*MS,o.y+(wz+mapHalf)/(2*mapHalf)*MS); };
             d->AddRectFilled(o,{o.x+MS,o.y+MS},IM_COL32(30,44,30,255));   // grass
             for(auto&t:trees){ ImVec2 p=w2m(t.x,t.z); d->AddCircleFilled(p,1.4f,IM_COL32(40,90,40,255)); }
             for(auto&nd:nodes){ ImVec2 p=w2m(nd.pos.x,nd.pos.z); d->AddCircleFilled(p,2.5f,IM_COL32(60,200,190,255)); }
-            if(ebaseAlive){ ImVec2 p=w2m(ebasePos.x,ebasePos.z);
-                d->AddCircleFilled(p,60.f/(2*mapHalf)*MS,IM_COL32(120,30,30,90));   // exclusion radius
+            for(auto&op:opps) if(op.alive){ ImVec2 p=w2m(op.hub.x,op.hub.z);
+                d->AddCircleFilled(p,60.f/(2*mapHalf)*MS,IM_COL32(120,30,30,90));   // keep-out radius
                 d->AddRectFilled({p.x-6,p.y-6},{p.x+6,p.y+6},IM_COL32(230,60,50,255));
-                d->AddText({p.x-14,p.y+7},IM_COL32(255,150,140,255),"ENEMY"); }
+                d->AddText({p.x-14,p.y+7},IM_COL32(255,150,140,255),"RIVAL"); }
             d->AddRect(o,{o.x+MS,o.y+MS},IM_COL32(90,110,90,255));
             ImGui::InvisibleButton("drop",{MS,MS});
-            if(ImGui::IsItemClicked(0)){ ImVec2 mp=ImGui::GetIO().MousePos;
+            if(ImGui::IsItemClicked(0) && !waitMap){ ImVec2 mp=ImGui::GetIO().MousePos;
                 float wx=((mp.x-o.x)/MS)*2*mapHalf-mapHalf, wz=((mp.y-o.y)/MS)*2*mapHalf-mapHalf;
-                float dEnemy = ebaseAlive ? glm::length(glm::vec2(wx-ebasePos.x,wz-ebasePos.z)) : 999.f;
+                float dEnemy=999.f;   // nearest live rival hub
+                for(auto&op:opps) if(op.alive) dEnemy=std::min(dEnemy,glm::length(glm::vec2(wx-op.hub.x,wz-op.hub.z)));
                 if(dEnemy>60.f){
                     // Premade hub at the chosen spot, nudged clear of any ore node.
-                    // y=0 here; the renderer/collision add GROUND, so it sits flat.
+                    // y=0 here; the renderer/collision seat it on the terrain (baseY).
                     glm::vec3 hp={std::round(wx/GRID)*GRID, 0.f, std::round(wz/GRID)*GRID};
                     for(auto&nd:nodes){ glm::vec2 d(hp.x-nd.pos.x,hp.z-nd.pos.z); float L=glm::length(d);
                         if(L<9.f){ glm::vec2 pu = L>0.01f? d/L : glm::vec2(1,0);
                             hp.x=std::round((nd.pos.x+pu.x*9.f)/GRID)*GRID;
                             hp.z=std::round((nd.pos.z+pu.y*9.f)/GRID)*GRID; } }
                     hubPos=hp; hubHp=hubMax; hubAlive=true;
+                    ebaseAlive=false; enemies.clear();   // PvP only — no AI base/waves
                     // Player spawns to the SIDE of the hub, also off any node.
                     glm::vec3 sp=hp+glm::vec3(7.f,0.f,0.f);
                     for(auto&nd:nodes){ if(glm::length(glm::vec2(sp.x-nd.pos.x,sp.z-nd.pos.z))<5.f) sp.x+=6.f; }
                     dropPos=sp; dropReady=true; phase=P_PLAY; syncCollision();
                     Audio::get().play("shift",0.6f);
-                } else Audio::get().play("crash",0.4f,0.7f);   // too close to enemy
+                } else Audio::get().play("crash",0.4f,0.7f);   // too close to a rival hub
             }
             if(ImGui::Button("Back")){ phase=P_LOBBY; lobbyEnter=true; }
             ImGui::End();
@@ -1194,7 +1399,7 @@ void Factory::renderHud(int winW,int winH){
         }
     }
 
-    // ── Hub command map: click to march robots, DRAG to lay a fence wall ───
+    // ── Hub command map: march robots, pencil fences, brush mines, box turrets ─
     if(cmdMapOpen){
         ImGui::SetNextWindowPos({winW*0.5f,winH*0.5f},ImGuiCond_Always,{0.5f,0.5f});
         float MS=460.f; ImGui::SetNextWindowSize({MS+30,MS+96});
@@ -1206,8 +1411,8 @@ void Factory::renderHud(int winW,int winH){
             if(ImGui::Button(bn[b])) hubBrush=b; if(sel) ImGui::PopStyleColor(); }
         ImGui::SameLine(); ImGui::TextColored({0.7f,0.95f,1.f,1.f},"  Fence:%d  Mines:%d  Turrets:%d",fenceBank,mineBank,turretBank);
         const char* hint = hubBrush==0?"Click/drag: march all robots there"
-                         : hubBrush==1?"Drag: lay a fence wall (blocks robots)"
-                         : hubBrush==2?"Drag a box: paint a minefield"
+                         : hubBrush==1?"Pencil: draw posts (they link up). Click to add on, right-click to lift"
+                         : hubBrush==2?"Brush: paint mines where you drag. Wheel = brush size"
                                       :"Drag a box: place a turret nest";
         ImGui::TextColored({0.6f,0.9f,1.f,1.f},"%s",hint);
         ImVec2 o=ImGui::GetCursorScreenPos(); ImDrawList* d=ImGui::GetWindowDrawList();
@@ -1221,7 +1426,10 @@ void Factory::renderHud(int winW,int winH){
         for(auto&t:trees){ ImVec2 p=w2m(t.x,t.z); d->AddCircleFilled(p,1.f,IM_COL32(40,90,40,200)); }
         for(auto&mm:machines){ ImVec2 p=w2m(mm.pos.x,mm.pos.z); d->AddRectFilled({p.x-3,p.y-3},{p.x+3,p.y+3},IM_COL32(150,170,255,255)); }
         for(auto&dp:deploys){ ImVec2 p=w2m(dp.pos.x,dp.pos.z);
-            d->AddCircleFilled(p,2.f, dp.kind==DK_ROBOT?IM_COL32(120,200,255,255):IM_COL32(230,180,80,255)); }
+            if(dp.kind==DK_FENCE){ if(dp.linked) d->AddLine(p,w2m(dp.linkPos.x,dp.linkPos.z),IM_COL32(220,210,150,255),2.f);
+                d->AddCircleFilled(p,1.5f,IM_COL32(240,230,170,255)); continue; }
+            d->AddCircleFilled(p,2.f, dp.kind==DK_ROBOT?IM_COL32(120,200,255,255)
+                                    : dp.kind==DK_MINE?IM_COL32(255,120,80,255):IM_COL32(230,180,80,255)); }
         for(auto&en:enemies){ ImVec2 p=w2m(en.pos.x,en.pos.z); d->AddCircleFilled(p,2.f,IM_COL32(240,70,60,255)); }
         if(hubAlive){ ImVec2 p=w2m(hubPos.x,hubPos.z); d->AddRectFilled({p.x-5,p.y-5},{p.x+5,p.y+5},IM_COL32(170,130,240,255)); }
         if(ebaseAlive){ ImVec2 p=w2m(ebasePos.x,ebasePos.z); d->AddRectFilled({p.x-6,p.y-6},{p.x+6,p.y+6},IM_COL32(230,60,50,255));
@@ -1232,40 +1440,70 @@ void Factory::renderHud(int winW,int winH){
         d->AddRect(o,{o.x+MS,o.y+MS},IM_COL32(90,120,100,255));
 
         ImGui::InvisibleButton("hubmap",{MS,MS});
-        static bool dragging=false; static ImVec2 dragStart;
-        if(ImGui::IsItemActivated()){ dragging=true; dragStart=ImGui::GetIO().MousePos; }
-        if(dragging){ ImVec2 cur=ImGui::GetIO().MousePos;   // live preview: line vs. box
-            if(hubBrush==2||hubBrush==3) d->AddRect(dragStart,cur,IM_COL32(200,220,120,230),0,0,2.f);
-            else d->AddLine(dragStart,cur,IM_COL32(200,220,120,220),3.f); }
+        const float FENCE_JOIN=30.f;          // pencil down this close to the open fence's end = keep drawing it
+        static bool dragging=false; static ImVec2 dragStart; static glm::vec2 strokeLast;
+        static double lastPaintSfx=0.0;
+        ImGuiIO& io=ImGui::GetIO(); ImVec2 mouse=io.MousePos; glm::vec2 W=m2w(mouse);
+        bool hov=ImGui::IsItemHovered();
+        glm::vec2 chainEnd{fenceChainEnd.x,fenceChainEnd.z};
+        bool joinable=fenceChainOpen && glm::length(W-chainEnd)<=FENCE_JOIN;
+        if(hov && hubBrush==2 && io.MouseWheel!=0.f)       // wheel resizes the mine brush
+            mineBrushR=glm::clamp(mineBrushR*(1.f+0.15f*io.MouseWheel),3.f,40.f);
+        if(hov && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) fenceChainOpen=false;   // lift the pencil
+        if(ImGui::IsItemActivated()){ dragging=true; dragStart=mouse; strokeLast=W;
+            if(hubBrush==1){                   // pencil down: continue the open fence, or start a new one
+                if(!joinable) fenceChainOpen=false;
+                if(placeFencePost(W)) Audio::get().play("melee_hit",0.4f,0.9f);
+            } else if(hubBrush==2){
+                if(paintMines(W,mineBrushR)){ Audio::get().play("melee_hit",0.45f,0.7f); lastPaintSfx=ImGui::GetTime(); }
+            } }
+        if(dragging){
+            if(hubBrush==1){                   // pencil: a post every span the stroke travels; each joins the last
+                glm::vec2 e{fenceChainEnd.x,fenceChainEnd.z};
+                while(fenceChainOpen && glm::length(W-e)>=FENCE_SPAN){
+                    e+=glm::normalize(W-e)*FENCE_SPAN; if(!placeFencePost(e)) break; }
+                if(fenceChainOpen){ ImVec2 a=w2m(fenceChainEnd.x,fenceChainEnd.z); d->AddLine(a,mouse,IM_COL32(200,220,120,200),2.f); }
+            } else if(hubBrush==2){            // brush: sweep along the mouse path so fast strokes leave no gaps
+                glm::vec2 seg=W-strokeLast; float L=glm::length(seg);
+                int n=(int)std::ceil(L/(mineBrushR*0.5f)), placed=0;
+                for(int i=1;i<=n;i++) placed+=paintMines(strokeLast+seg*((float)i/n),mineBrushR);
+                strokeLast=W;
+                if(placed && ImGui::GetTime()-lastPaintSfx>0.12){ Audio::get().play("melee_hit",0.35f,0.7f); lastPaintSfx=ImGui::GetTime(); }
+            } else if(hubBrush==3) d->AddRect(dragStart,mouse,IM_COL32(200,220,120,230),0,0,2.f);
+            else d->AddLine(dragStart,mouse,IM_COL32(200,220,120,220),3.f);
+        }
+        if(hov && hubBrush==2){                // brush outline (radius on the map)
+            float rp=mineBrushR/(2*mapHalf)*MS;
+            d->AddCircle(mouse,rp,IM_COL32(255,140,90,dragging?255:170),32,1.5f);
+        }
+        if(hov && hubBrush==1 && !dragging && fenceChainOpen){   // where the next click joins from
+            ImVec2 a=w2m(fenceChainEnd.x,fenceChainEnd.z);
+            d->AddCircle(a,4.f,IM_COL32(255,230,120,230),12,1.5f);
+            if(joinable) d->AddLine(a,mouse,IM_COL32(255,230,120,150),1.5f);
+        }
         if(dragging && ImGui::IsItemDeactivated()){
-            dragging=false; ImVec2 end=ImGui::GetIO().MousePos;
-            float dpix=std::sqrt((end.x-dragStart.x)*(end.x-dragStart.x)+(end.y-dragStart.y)*(end.y-dragStart.y));
-            glm::vec2 A=m2w(dragStart), B=m2w(end);
+            dragging=false;
+            float dpix=std::sqrt((mouse.x-dragStart.x)*(mouse.x-dragStart.x)+(mouse.y-dragStart.y)*(mouse.y-dragStart.y));
+            glm::vec2 A=m2w(dragStart), B=W;
             if(hubBrush==0){            // March robots to the target
                 glm::vec3 tgt{std::round(B.x/GRID)*GRID,0.f,std::round(B.y/GRID)*GRID};
                 for(auto&bar:machines) if(bar.type==BARRACKS)
                     while(bar.in[ROBOT_ITEM]>0){ bar.in[ROBOT_ITEM]--; Deployable rb{}; rb.kind=DK_ROBOT; rb.pos=bar.pos; rb.goal=tgt; rb.walking=true; deploys.push_back(rb); }
                 for(auto&d2:deploys) if(d2.kind==DK_ROBOT){ d2.goal=tgt; d2.walking=true; }
                 Audio::get().play("interact",0.6f,1.3f);
-            } else if(hubBrush==1){    // Fence wall from stock (a tall belt that blocks robots)
-                float wlen=glm::length(B-A); int count=(int)(wlen/3.f)+1;
-                glm::vec2 step=(count>1)?(B-A)/(float)(count-1):glm::vec2(0);
-                int placed=0;
-                for(int i=0;i<count && fenceBank>0;i++){ glm::vec2 p=A+step*(float)i;
-                    Deployable f{}; f.kind=DK_FENCE; f.pos={p.x,0.f,p.y}; f.walking=false; deploys.push_back(f);
-                    fenceBank--; placed++; }
-                if(placed){ syncCollision(); Audio::get().play("melee_hit",0.5f,0.8f); }
-            } else {                   // Mines / Turrets — paint a box with a grid array
-                bool mine=(hubBrush==2); int* bank=mine?&mineBank:&turretBank;
-                float SP=mine?4.f:9.f;   // turrets are sparser
+            } else if(hubBrush==1){    // pencil up: a last post where the stroke ended, then solidify
+                if(fenceChainOpen && glm::length(B-glm::vec2(fenceChainEnd.x,fenceChainEnd.z))>1.f) placeFencePost(B);
+                syncCollision();
+            } else if(hubBrush==3){    // Turrets — drag a box, gridded
+                float SP=9.f;
                 glm::vec2 lo{std::min(A.x,B.x),std::min(A.y,B.y)}, hi{std::max(A.x,B.x),std::max(A.y,B.y)};
                 if(dpix<8.f){ hi=lo+glm::vec2(SP,SP); }   // a tap drops a single one
                 int placed=0;
-                for(float x=lo.x;x<=hi.x && *bank>0;x+=SP)
-                for(float z=lo.y;z<=hi.y && *bank>0;z+=SP){
-                    Deployable dd{}; dd.kind=mine?DK_MINE:DK_TURRET; dd.pos={std::round(x/GRID)*GRID,0.f,std::round(z/GRID)*GRID};
-                    dd.walking=false; deploys.push_back(dd); (*bank)--; placed++; }
-                if(placed) Audio::get().play("melee_hit",0.5f,mine?0.7f:1.0f);
+                for(float x=lo.x;x<=hi.x && turretBank>0;x+=SP)
+                for(float z=lo.y;z<=hi.y && turretBank>0;z+=SP){
+                    Deployable dd{}; dd.kind=DK_TURRET; dd.pos={std::round(x/GRID)*GRID,0.f,std::round(z/GRID)*GRID};
+                    dd.walking=false; deploys.push_back(dd); turretBank--; placed++; }
+                if(placed) Audio::get().play("melee_hit",0.5f,1.0f);
             }
         }
         if(ImGui::Button("Close")) cmdMapOpen=false;
@@ -1281,8 +1519,10 @@ void Factory::renderHud(int winW,int winH){
       dl->AddText({18,y}, IM_COL32(160,255,180,235), pb); y+=17; }
     int rob=0,trap=0; for(auto&d:deploys){ if(d.kind==DK_ROBOT)rob++; else trap++; }
     int stored=0; for(auto&mm:machines) if(mm.type==BARRACKS) stored+=mm.in[ROBOT_ITEM];
-    char mb[110]; snprintf(mb,sizeof(mb),"Stored %d  Deployed %d  Traps %d   ENEMIES %d",
-                          stored,rob,trap,(int)enemies.size());
+    int rivalBots=0; for(auto&o:opps) if(o.alive) rivalBots+=(int)o.units.size();
+    char mb[110];
+    if(netActive) snprintf(mb,sizeof(mb),"Stored %d  Deployed %d  Traps %d   RIVAL BOTS %d",stored,rob,trap,rivalBots);
+    else          snprintf(mb,sizeof(mb),"Stored %d  Deployed %d  Traps %d",stored,rob,trap);
     dl->AddText({18,y+4}, IM_COL32(150,165,185,200), mb);
 
     // Enemy base objective bar (top centre)
@@ -1297,11 +1537,54 @@ void Factory::renderHud(int winW,int winH){
             ImVec2 cs=ImGui::CalcTextSize(c);
             dl->AddText({winW*0.5f-cs.x*0.5f,by2+32}, IM_COL32(150,220,160,230), c); }
     }
+    // Rival hubs: name, health and distance floating over each one, so you can
+    // find them past hills and trees (and see what your robots are hitting).
+    if(netActive && phase==P_PLAY){ int k=0;
+        for(auto&o:opps){ k++; if(!o.alive) continue;
+            glm::vec4 c=lastVP*glm::vec4(o.hub.x,baseY(o.hub,4.f,4.f)+7.5f,o.hub.z,1.f);
+            if(c.w<=0.1f) continue;                                  // behind the camera
+            float sx=(c.x/c.w*0.5f+0.5f)*winW, sy=(1.f-(c.y/c.w*0.5f+0.5f))*winH;
+            if(sx<-60||sx>winW+60||sy<-30||sy>winH+30) continue;
+            float f=glm::clamp(o.hp/hubMax,0.f,1.f), dist=glm::length(glm::vec2(o.hub.x-playerCam.x,o.hub.z-playerCam.z));
+            char lb[48]; snprintf(lb,sizeof(lb),"RIVAL %d  %dm",k,(int)dist);
+            ImVec2 ts=ImGui::CalcTextSize(lb);
+            dl->AddText({sx-ts.x*0.5f,sy-18},IM_COL32(255,150,140,240),lb);
+            dl->AddRectFilled({sx-40,sy},{sx+40,sy+6},IM_COL32(0,0,0,170),2.f);
+            dl->AddRectFilled({sx-40,sy},{sx-40+80*f,sy+6},IM_COL32(220,70,60,240),2.f); } }
+    if(rivalLeftT>0.f){ const char* t="A rival left the match";
+        ImVec2 ts=ImGui::CalcTextSize(t);
+        dl->AddText({winW*0.5f-ts.x*0.5f,36.f},IM_COL32(255,220,150,(int)(255*std::min(1.f,rivalLeftT))),t); }
     // Net free-for-all banner: rivals still standing
     if(netActive){ int alive=0; for(auto&o:opps) if(o.alive) alive++;
         char c[64]; snprintf(c,sizeof(c), net.connected()? "FREE-FOR-ALL — %d rival(s) standing" : "waiting for players…", alive);
         ImVec2 cs=ImGui::CalcTextSize(c);
         dl->AddText({winW*0.5f-cs.x*0.5f, 16.f}, IM_COL32(255,180,120,235), c);
+    }
+
+    // ── Live minimap (top-right): updates continuously, incl. other players ──
+    if(phase==P_PLAY){
+        float MM=180.f, ox=winW-MM-16.f, oy=16.f;
+        auto w2mm=[&](float wx,float wz){ return ImVec2(ox+(wx+mapHalf)/(2*mapHalf)*MM, oy+(wz+mapHalf)/(2*mapHalf)*MM); };
+        dl->AddRectFilled({ox,oy},{ox+MM,oy+MM}, IM_COL32(12,16,14,200));
+        float cs=MM/(float)gridN;
+        for(int cz=0;cz<gridN;cz++)for(int cx=0;cx<gridN;cx++) if(explored[cz*gridN+cx]){
+            ImVec2 a{ox+cx*cs,oy+cz*cs}; dl->AddRectFilled(a,{a.x+cs+1,a.y+cs+1},IM_COL32(34,50,40,255)); }
+        for(auto&n:nodes){ ImVec2 p=w2mm(n.pos.x,n.pos.z); dl->AddCircleFilled(p,1.4f,IM_COL32(60,200,190,220)); }
+        for(auto&mm2:machines){ ImVec2 p=w2mm(mm2.pos.x,mm2.pos.z); dl->AddRectFilled({p.x-1.5f,p.y-1.5f},{p.x+1.5f,p.y+1.5f},IM_COL32(150,170,255,255)); }
+        for(auto&dp:deploys){ ImVec2 p=w2mm(dp.pos.x,dp.pos.z);
+            if(dp.kind==DK_FENCE){ if(dp.linked) dl->AddLine(p,w2mm(dp.linkPos.x,dp.linkPos.z),IM_COL32(220,210,150,230),1.5f); continue; }
+            dl->AddCircleFilled(p,1.4f, dp.kind==DK_ROBOT?IM_COL32(120,200,255,255):IM_COL32(230,180,80,220)); }
+        for(auto&en:enemies){ ImVec2 p=w2mm(en.pos.x,en.pos.z); dl->AddCircleFilled(p,1.6f,IM_COL32(240,70,60,255)); }
+        // Opponents (live): their hub, robots, and avatar
+        for(auto&o:opps) if(o.alive){ ImVec2 p=w2mm(o.hub.x,o.hub.z);
+            dl->AddRectFilled({p.x-3,p.y-3},{p.x+3,p.y+3},IM_COL32(235,70,60,255));
+            for(auto&u:o.units){ ImVec2 q=w2mm(u.x,u.y); dl->AddCircleFilled(q,1.4f,IM_COL32(240,90,120,240)); }
+            ImVec2 ap=w2mm(o.avatarPos.x,o.avatarPos.z); dl->AddCircleFilled(ap,3.f,IM_COL32(90,160,255,255)); }
+        if(hubAlive){ ImVec2 p=w2mm(hubPos.x,hubPos.z); dl->AddRectFilled({p.x-3,p.y-3},{p.x+3,p.y+3},IM_COL32(170,130,240,255)); }
+        // The player
+        { ImVec2 p=w2mm(playerCam.x,playerCam.z); dl->AddCircleFilled(p,3.f,IM_COL32(255,255,255,255));
+          dl->AddCircle(p,3.f,IM_COL32(0,0,0,180)); }
+        dl->AddRect({ox,oy},{ox+MM,oy+MM}, IM_COL32(90,120,100,255));
     }
     // Your Hub health (top-left, under the stockpile)
     if(hubAlive){ float f=hubHp/hubMax; if(f<0)f=0;
@@ -1310,7 +1593,7 @@ void Factory::renderHud(int winW,int winH){
         dl->AddRectFilled({hx+40,hy},{hx+240,hy+12}, IM_COL32(0,0,0,160),3.f);
         dl->AddRectFilled({hx+40,hy},{hx+40+200*f,hy+12}, IM_COL32(140,110,230,240),3.f);
         dl->AddText({hx,hy+16}, IM_COL32(120,140,170,200), "[E] at the Hub = top-down view"); }
-    if(won){ const char* t="ENEMY BASE DESTROYED — VICTORY";
+    if(won){ const char* t=netActive? "LAST HUB STANDING — VICTORY" : "ENEMY BASE DESTROYED — VICTORY";
         ImVec2 ts=ImGui::CalcTextSize(t);
         dl->AddText({winW*0.5f-ts.x*0.5f,winH*0.35f}, IM_COL32(120,255,150,255), t); }
     if(lost){

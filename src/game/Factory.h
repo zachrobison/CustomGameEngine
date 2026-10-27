@@ -16,6 +16,7 @@ class Factory {
 public:
     ~Factory();
     void reset(unsigned seed);
+    bool mapDirty = false;          // map regenerated (e.g. host's seed arrived): main rebuilds trees
     void setCollider(Props* p) { collider = p; }
     bool active = false;
 
@@ -51,6 +52,8 @@ public:
     bool  lobbyEnter = false;
     bool  lobbyNearTable = false;
     glm::vec3 lobbyCenter() const { return {2000.f, GROUND, 0.f}; }
+    // Battlefield floor height (rolling hills; flat off the map / in the lobby).
+    float heightAt(float x, float z) const;
 
     bool buildMode = false;
     void toggleBuild();
@@ -114,7 +117,8 @@ private:
                   std::vector<float> prog; float feed; };
     struct Node { glm::vec3 pos; float r; };
     struct Deployable { int kind; glm::vec3 pos, goal; bool walking; float t;
-                        float hp = 60.f; float fireCd = 0.f; };
+                        float hp = 60.f; float fireCd = 0.f;
+                        bool linked = false; glm::vec3 linkPos{0.f}; };   // fence post: wall runs to linkPos
     struct Enemy   { glm::vec3 pos, goal; float hp = 55.f; float fireCd = 0.f; };
     struct Tracer  { glm::vec3 a, b; float t; bool friendly; };
 
@@ -142,6 +146,9 @@ private:
     int   mineBank = 0;            // Mines stockpiled, painted as a field from the hub map
     int   turretBank = 0;          // Turrets stockpiled, painted from the hub map
     int   hubBrush = 0;            // hub-map tool: 0=march robots 1=fence 2=mines 3=turrets
+    bool  fenceChainOpen = false;  // fence pencil: the next post links back to fenceChainEnd
+    glm::vec3 fenceChainEnd{0.f};
+    float mineBrushR = 8.f;        // mine paint-brush radius (world units, wheel adjusts)
     glm::vec3 playerCam{0.f};      // latest player camera pos (for avatar sync)
     float playerYaw = 0.f;
     // Player hub (home base) — placed at the drop point
@@ -156,10 +163,18 @@ private:
                  std::vector<glm::vec2> units; float pendingDmg; float lastSeen;
                  glm::vec3 avatarPos{0.f}; float avatarYaw = 0.f; };
     Net   net;
+    unsigned mapSeed = 0;          // seed this map was built from (host broadcasts it)
+    bool  mapSynced = false;       // joiner has the host's map (host: always)
+    float seedSendCd = 0.f, netClock = 0.f;   // netClock runs in the front-end too
+    float rivalLeftT = 0.f;        // "a rival left" notice timer
+    glm::mat4 lastVP{1.f};         // last world view-projection (HUD markers)
+    void  genMap(unsigned seed);
+    void  netRecv();
     unsigned myId = 0;             // this player's random id (set on host/join)
     float netSendCd = 0.f;         // throttle snapshots to ~15 Hz
     std::vector<Opp> opps;
     bool  everSawOpp = false;      // for the "last hub standing" win check
+    std::vector<glm::vec2> pendingKills;  // blast points to broadcast (mines cull peer robots)
     void  netTick(float dt);
     Opp*  findOpp(unsigned id);
     int   menuMachine  = -1;            // machine whose menu is open
@@ -185,12 +200,30 @@ private:
     float mapHalf = 370.f;   // 2x bigger again (~10x the original was 260)
 
     GLuint vao = 0, vbo = 0, prog = 0;
+    // Hills: smooth elliptical bumps (some stretched into ridges) from the map seed.
+    struct Hill { glm::vec2 c; float a, b, cs, sn, h; };
+    std::vector<Hill> hills;
+    GLuint gVao = 0, gVbo = 0, gEbo = 0; int gIdx = 0;   // terrain mesh
+    float  hillRaw(float x, float z) const;     // hill height above GROUND, before node pads
+    float  baseY(glm::vec3 pos, float hx, float hz) const;   // lowest ground under a footprint
+    void   buildGround();
     GLuint texFloor = 0, texMetal = 0, texBelt = 0;
     void   initCube();
     void   initTextures();
     void   cube(const glm::mat4& VP, glm::vec3 c, glm::vec3 h, glm::vec3 col,
                 glm::vec3 sun, float fog, glm::vec3 cam, float alpha,
                 GLuint tex, glm::vec2 uvRep = {1,1}, glm::vec2 uvOff = {0,0});
+    // cube() turned by `yaw` about +Y (local +Z ends up along (sin yaw, cos yaw)),
+    // then tilted so local +Z climbs at `pitch`.
+    void   cubeYaw(const glm::mat4& VP, glm::vec3 c, glm::vec3 h, float yaw, glm::vec3 col,
+                   GLuint tex, glm::vec2 uvRep = {1,1}, float pitch = 0.f);
+    // Fence pencil: drop one post at p (xz), linked to the open chain's end;
+    // gaps longer than a span are filled with extra posts. False = out of stock.
+    bool   placeFencePost(glm::vec2 p);
+    // Mine brush: drop mines on the brush's grid cells around c that are clear.
+    int    paintMines(glm::vec2 c, float radius);
+    // Push an agent of radius `rad` out of every fence post and wall segment.
+    void   pushOutOfFences(glm::vec3& p, float rad) const;
     void   drawMachine(const glm::mat4& VP, int type, glm::vec3 pos, float yaw,
                        glm::vec3 sun, float fog, glm::vec3 cam, float alpha);
     bool   rayGround(glm::vec3 ro, glm::vec3 rd, glm::vec3& out) const;
