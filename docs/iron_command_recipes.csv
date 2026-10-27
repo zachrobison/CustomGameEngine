@@ -1,0 +1,19 @@
+building,recipe_name,inputs,output,craft_seconds,notes
+Miner,Mine Ore,placed on an ore deposit,1 Ore,1.4,Must sit directly on an ore deposit to work
+Miner,Overclock,placed on an ore deposit,2 Ore,1.4,Higher output setting of the Miner
+Miner,Turbo,placed on an ore deposit,3 Ore,1.2,Fastest and highest-output Miner setting
+Smelter,Smelt,1 Ore,1 Ingot,2.0,Turns raw ore into usable ingots
+Constructor,Make Screws,1 Ingot,2 Screws,1.5,Screws are a common intermediate part
+Constructor,Make Plate,1 Ingot,1 Plate,2.0,Plates are used for Parts robots and defenses
+Constructor,Make Rod,1 Ingot,1 Rod,1.2,Rods are used for Parts and defenses
+Assembler,Part from Plate,1 Plate + 2 Screws,1 Part,3.0,Parts are the upgrade currency
+Assembler,Part from Rod,1 Rod + 1 Screw,1 Part,2.5,Alternate cheaper recipe for Parts
+Assembler,Robot,2 Plates + 4 Screws,1 Robot,4.0,Robots are the mobile combat unit you mass-produce
+Assembler,Turret,1 Plate + 1 Rod,1 Turret (stockpiled),3.5,Auto-gun; drawn onto the map from the Hub Command Map
+Assembler,Mine,1 Plate + 2 Screws,1 Mine (stockpiled),2.5,Area trap; painted as a minefield from the Command Map
+Assembler,Fence,2 Rods,1 Fence (stockpiled),2.0,Tall wall that blocks robots; drawn from the Command Map
+Assembler,Tripwire,1 Rod + 1 Screw,1 Tripwire (stockpiled),2.0,Trap that triggers on a passing enemy
+Barracks,Robot Storage,Robots delivered by belt,stored Robots,n/a,Holds robots until you order them out
+Terminal,Command Robots,none,opens the Command Map,n/a,Same top-down tactical view the Hub provides
+Hub,Home Base,premade at your drop point,your home base,n/a,Has 1400 health; if destroyed you are eliminated
+Conveyor,Belt,carries items between machines,moved items,n/a,Automatically splits and merges item flow
