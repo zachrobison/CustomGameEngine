@@ -225,7 +225,8 @@ glm::vec3 Factory::footprint(int type) const{
 }
 void Factory::drawMachine(const glm::mat4&VP,int type,glm::vec3 pos,float yaw,
                           glm::vec3 sun,float fog,glm::vec3 cam,float alpha){
-    (void)yaw; glm::vec3 fp=footprint(type); glm::vec3 b{pos.x,baseY(pos,fp.x,fp.z),pos.z}; glm::vec2 rep{2,1};
+    glm::vec3 fp=footprint(type); glm::vec3 b{pos.x,baseY(pos,fp.x,fp.z),pos.z}; glm::vec2 rep{2,1};
+    if(type>=0 && type<6 && mMach[type].loaded()){ drawGlb(mMach[type],VP,b,yaw,sun,fog,cam); return; }
     switch(type){
         case MINER:
             cube(VP,b+glm::vec3(0,1.0f,0),{1.2f,1.0f,1.2f},{0.55f,0.42f,0.30f},sun,fog,cam,alpha,texMetal,rep);
@@ -248,6 +249,30 @@ void Factory::drawMachine(const glm::mat4&VP,int type,glm::vec3 pos,float yaw,
             cube(VP,b+glm::vec3(0,0.5f,0),{1.2f,0.5f,1.2f},{0.35f,0.38f,0.44f},sun,fog,cam,alpha,texMetal,{1,1});
             cube(VP,b+glm::vec3(0,1.2f,0.4f),{1.0f,0.6f,0.15f},{0.3f,0.9f,0.7f},sun,fog,cam,alpha,texMetal,{1,1}); break; // screen
     }
+}
+
+// Load the atomic-age model set once (needs a live GL context, so lazily from
+// render()). Missing files just leave a model !loaded() → cube fallback.
+void Factory::loadModels(){
+    const std::string P="assets/models/ironcommand/";
+    mMach[MINER].load(P+"ic_miner.glb");           mMach[SMELTER].load(P+"ic_smelter.glb");
+    mMach[CONSTRUCTOR].load(P+"ic_constructor.glb");mMach[ASSEMBLER].load(P+"ic_assembler.glb");
+    mMach[BARRACKS].load(P+"ic_barracks.glb");     mMach[TERMINAL].load(P+"ic_terminal.glb");
+    mHub.load(P+"ic_hub.glb");                     mHubRival.load(P+"ic_hub_rival.glb");
+    mRobot.load(P+"ic_robot.glb");                 mRobotRival.load(P+"ic_robot_rival.glb");
+    mMine.load(P+"ic_mine.glb");                   mTurret.load(P+"ic_turret.glb");
+    mFence.load(P+"ic_fence.glb");                 mTripwire.load(P+"ic_tripwire.glb");
+    const char* IF[ITEM_N]={"ic_item_ore.glb","ic_item_ingot.glb","ic_item_screw.glb",
+        "ic_item_plate.glb","ic_item_rod.glb","ic_item_part.glb","ic_item_robot.glb"};
+    for(int i=0;i<ITEM_N;i++) mItem[i].load(P+IF[i]);
+}
+
+// Render one GLB, then restore the cube pipeline (GltfModel binds its own
+// program/VAO and leaves VAO unbound) so following cube() calls still work.
+void Factory::drawGlb(GltfModel& m,const glm::mat4& VP,glm::vec3 pos,float yaw,
+                      glm::vec3 sun,float fog,glm::vec3 cam){
+    m.render(VP,pos,yaw,1.f,sun,fog,cam);
+    glUseProgram(prog); glBindVertexArray(vao);
 }
 
 // Full node list of a belt at belt height (from → waypoints → to).
@@ -961,6 +986,7 @@ void Factory::update(float dt,double now,glm::vec3 camPos,glm::vec3 camFwd,
 
 void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,double now){
     if(!active||!prog) return;
+    if(!modelsLoaded){ loadModels(); modelsLoaded=true; }
     lastVP=VP;   // the HUD projects rival-hub markers with it
     glUseProgram(prog);
     glUniform3fv(glGetUniformLocation(prog,"uSun"),1,glm::value_ptr(sun));
@@ -1041,21 +1067,26 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
     for(auto&d:deploys){ glm::vec3 b{d.pos.x,heightAt(d.pos.x,d.pos.z),d.pos.z};
         switch(d.kind){
             case DK_ROBOT:
-                cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.6f,0.62f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
-                cube(VP,b+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{0.4f,0.85f,0.9f},sun,fog,cam,1.f,texMetal,{1,1});
+                if(mRobot.loaded()){ float yaw=std::atan2(d.goal.x-d.pos.x,d.goal.z-d.pos.z);
+                    drawGlb(mRobot,VP,b,yaw,sun,fog,cam); }
+                else { cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.6f,0.62f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
+                    cube(VP,b+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{0.4f,0.85f,0.9f},sun,fog,cam,1.f,texMetal,{1,1}); }
                 break;
             case DK_MINE:
-                cube(VP,b+glm::vec3(0,0.15f,0),{0.5f,0.15f,0.5f},{0.8f,0.3f,0.25f},sun,fog,cam,1.f,texMetal,{1,1});
-                cube(VP,b+glm::vec3(0,0.35f,0),{0.18f,0.12f,0.18f},{1.f,0.5f,0.2f},sun,fog,cam,1.f,texMetal,{1,1});
+                if(mMine.loaded()) drawGlb(mMine,VP,b,0,sun,fog,cam);
+                else { cube(VP,b+glm::vec3(0,0.15f,0),{0.5f,0.15f,0.5f},{0.8f,0.3f,0.25f},sun,fog,cam,1.f,texMetal,{1,1});
+                    cube(VP,b+glm::vec3(0,0.35f,0),{0.18f,0.12f,0.18f},{1.f,0.5f,0.2f},sun,fog,cam,1.f,texMetal,{1,1}); }
                 break;
             case DK_TURRET:
-                cube(VP,b+glm::vec3(0,0.4f,0),{0.5f,0.4f,0.5f},{0.45f,0.48f,0.55f},sun,fog,cam,1.f,texMetal,{1,1});
-                cube(VP,b+glm::vec3(0,1.0f,0),{0.3f,0.3f,0.3f},{0.6f,0.63f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
-                cube(VP,b+glm::vec3(0,1.05f,0.5f),{0.08f,0.08f,0.5f},{0.3f,0.32f,0.36f},sun,fog,cam,1.f,texMetal,{1,1});
+                if(mTurret.loaded()) drawGlb(mTurret,VP,b,0,sun,fog,cam);
+                else { cube(VP,b+glm::vec3(0,0.4f,0),{0.5f,0.4f,0.5f},{0.45f,0.48f,0.55f},sun,fog,cam,1.f,texMetal,{1,1});
+                    cube(VP,b+glm::vec3(0,1.0f,0),{0.3f,0.3f,0.3f},{0.6f,0.63f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
+                    cube(VP,b+glm::vec3(0,1.05f,0.5f),{0.08f,0.08f,0.5f},{0.3f,0.32f,0.36f},sun,fog,cam,1.f,texMetal,{1,1}); }
                 break;
             case DK_FENCE:   // a post; linked posts get a tall belt-textured wall back to the previous one
-                cube(VP,b+glm::vec3(0,1.1f,0),{0.2f,1.1f,0.2f},{0.55f,0.58f,0.64f},sun,fog,cam,1.f,texMetal,{1,2});
-                cube(VP,b+glm::vec3(0,2.28f,0),{0.26f,0.1f,0.26f},{0.72f,0.68f,0.5f},sun,fog,cam,1.f,texMetal,{1,1});
+                if(mFence.loaded()) drawGlb(mFence,VP,b,0,sun,fog,cam);
+                else { cube(VP,b+glm::vec3(0,1.1f,0),{0.2f,1.1f,0.2f},{0.55f,0.58f,0.64f},sun,fog,cam,1.f,texMetal,{1,2});
+                    cube(VP,b+glm::vec3(0,2.28f,0),{0.26f,0.1f,0.26f},{0.72f,0.68f,0.5f},sun,fog,cam,1.f,texMetal,{1,1}); }
                 if(d.linked){
                     glm::vec3 e{d.linkPos.x,heightAt(d.linkPos.x,d.linkPos.z),d.linkPos.z}, ab=e-b;
                     float L=glm::length(glm::vec2(ab.x,ab.z));
@@ -1066,36 +1097,41 @@ void Factory::render(const glm::mat4&VP,glm::vec3 sun,float fog,glm::vec3 cam,do
                 }
                 break;
             case DK_TRIPWIRE:
-                cube(VP,b+glm::vec3(-1.f,0.4f,0),{0.06f,0.4f,0.06f},{0.7f,0.7f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
-                cube(VP,b+glm::vec3( 1.f,0.4f,0),{0.06f,0.4f,0.06f},{0.7f,0.7f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
-                cube(VP,b+glm::vec3(0,0.75f,0),{1.f,0.02f,0.02f},{1.f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{1,1});
+                if(mTripwire.loaded()) drawGlb(mTripwire,VP,b,0,sun,fog,cam);
+                else { cube(VP,b+glm::vec3(-1.f,0.4f,0),{0.06f,0.4f,0.06f},{0.7f,0.7f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
+                    cube(VP,b+glm::vec3( 1.f,0.4f,0),{0.06f,0.4f,0.06f},{0.7f,0.7f,0.7f},sun,fog,cam,1.f,texMetal,{1,1});
+                    cube(VP,b+glm::vec3(0,0.75f,0),{1.f,0.02f,0.02f},{1.f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{1,1}); }
                 break;
         }
     }
-    // Your Hub (wizard-purple keep) — lose it and the match is over
+    // Your Hub — lose it and the match is over
     if(hubAlive){ glm::vec3 b{hubPos.x,baseY(hubPos,4.f,4.f),hubPos.z}; float f=hubHp/hubMax;
-        cube(VP,b+glm::vec3(0,2.0f,0),{4.0f,2.0f,4.0f},{0.42f,0.34f,0.62f},sun,fog,cam,1.f,texMetal,{4,3});
-        cube(VP,b+glm::vec3(0,4.2f,0),{2.4f,0.9f,2.4f},{0.55f,0.42f,0.8f},sun,fog,cam,1.f,texMetal,{2,2});
-        cube(VP,b+glm::vec3(0,5.6f,0),{0.6f,0.8f,0.6f},{0.5f*f+0.4f,0.9f,1.0f},sun,fog,cam,1.f,texMetal,{1,1}); } // beacon dims as it takes damage
+        if(mHub.loaded()) drawGlb(mHub,VP,b,0,sun,fog,cam);
+        else { cube(VP,b+glm::vec3(0,2.0f,0),{4.0f,2.0f,4.0f},{0.42f,0.34f,0.62f},sun,fog,cam,1.f,texMetal,{4,3});
+            cube(VP,b+glm::vec3(0,4.2f,0),{2.4f,0.9f,2.4f},{0.55f,0.42f,0.8f},sun,fog,cam,1.f,texMetal,{2,2});
+            cube(VP,b+glm::vec3(0,5.6f,0),{0.6f,0.8f,0.6f},{0.5f*f+0.4f,0.9f,1.0f},sun,fog,cam,1.f,texMetal,{1,1}); } }
     // Enemy base (large red fortress) — the objective
     if(ebaseAlive){ glm::vec3 b{ebasePos.x,baseY(ebasePos,4.f,4.f),ebasePos.z};
         cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
         cube(VP,b+glm::vec3(0,3.8f,0),{2.2f,0.9f,2.2f},{0.7f,0.25f,0.22f},sun,fog,cam,1.f,texMetal,{2,2});
         cube(VP,b+glm::vec3(0,5.1f,0),{0.5f,0.6f,0.5f},{1.f,0.35f,0.25f},sun,fog,cam,1.f,texMetal,{1,1}); }
-    // Enemy robots (red)
+    // Enemy robots (rival-red model)
     for(auto&e:enemies){ glm::vec3 b{e.pos.x,heightAt(e.pos.x,e.pos.z),e.pos.z};
-        cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.85f,0.3f,0.28f},sun,fog,cam,1.f,texMetal,{1,1});
-        cube(VP,b+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.5f,0.4f},sun,fog,cam,1.f,texMetal,{1,1}); }
-    // Opponents (net free-for-all): each rival hub is a red fortress, their
-    // robots stream in as crimson contacts.
+        if(mRobotRival.loaded()){ float yaw=std::atan2(e.goal.x-e.pos.x,e.goal.z-e.pos.z);
+            drawGlb(mRobotRival,VP,b,yaw,sun,fog,cam); }
+        else { cube(VP,b+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.85f,0.3f,0.28f},sun,fog,cam,1.f,texMetal,{1,1});
+            cube(VP,b+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.5f,0.4f},sun,fog,cam,1.f,texMetal,{1,1}); } }
+    // Opponents (net free-for-all): rival hub + their robots streamed in.
     for(auto& o:opps){ if(!o.alive) continue;
         glm::vec3 b{o.hub.x,baseY(o.hub,4.f,4.f),o.hub.z};
-        cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
-        cube(VP,b+glm::vec3(0,3.8f,0),{2.2f,0.9f,2.2f},{0.7f,0.25f,0.22f},sun,fog,cam,1.f,texMetal,{2,2});
-        cube(VP,b+glm::vec3(0,5.1f,0),{0.5f,0.6f,0.5f},{1.f,0.35f,0.25f},sun,fog,cam,1.f,texMetal,{1,1});
+        if(mHubRival.loaded()) drawGlb(mHubRival,VP,b,0,sun,fog,cam);
+        else { cube(VP,b+glm::vec3(0,1.8f,0),{4.0f,1.8f,4.0f},{0.5f,0.2f,0.2f},sun,fog,cam,1.f,texMetal,{4,3});
+            cube(VP,b+glm::vec3(0,3.8f,0),{2.2f,0.9f,2.2f},{0.7f,0.25f,0.22f},sun,fog,cam,1.f,texMetal,{2,2});
+            cube(VP,b+glm::vec3(0,5.1f,0),{0.5f,0.6f,0.5f},{1.f,0.35f,0.25f},sun,fog,cam,1.f,texMetal,{1,1}); }
         for(auto&u:o.units){ glm::vec3 p={u.x,heightAt(u.x,u.y),u.y};
-            cube(VP,p+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.9f,0.15f,0.35f},sun,fog,cam,1.f,texMetal,{1,1});
-            cube(VP,p+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.4f,0.6f},sun,fog,cam,1.f,texMetal,{1,1}); } }
+            if(mRobotRival.loaded()) drawGlb(mRobotRival,VP,p,0,sun,fog,cam);
+            else { cube(VP,p+glm::vec3(0,0.5f,0),{0.35f,0.5f,0.35f},{0.9f,0.15f,0.35f},sun,fog,cam,1.f,texMetal,{1,1});
+                cube(VP,p+glm::vec3(0,1.1f,0),{0.25f,0.2f,0.25f},{1.f,0.4f,0.6f},sun,fog,cam,1.f,texMetal,{1,1}); } } }
     // Shot tracers (thin stretched box, colour by side)
     for(auto&tr:tracers){ glm::vec3 d=tr.b-tr.a; float len=glm::length(d); if(len<0.1f) continue;
         glm::vec3 mid=(tr.a+tr.b)*0.5f; float ang=std::atan2(-d.z,d.x);

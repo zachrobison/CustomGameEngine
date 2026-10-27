@@ -2,6 +2,7 @@
 #define GL_SILENCE_DEPRECATION
 #include "../gl_compat.h"
 #include "../net/Net.h"
+#include "../renderer/GltfModel.h"
 #include <glm/glm.hpp>
 #include <vector>
 #include <string>
@@ -200,6 +201,19 @@ private:
     float mapHalf = 370.f;   // 2x bigger again (~10x the original was 260)
 
     GLuint vao = 0, vbo = 0, prog = 0;
+
+    // ── Atomic-age 3D model set (assets/models/ironcommand). Loaded lazily on
+    // the first render. GltfModel swaps the GL program/VAO, so drawGlb() renders
+    // one then restores the cube pipeline for the surrounding cube() calls.
+    bool      modelsLoaded = false;
+    void      loadModels();
+    void      drawGlb(GltfModel& m, const glm::mat4& VP, glm::vec3 pos, float yaw,
+                      glm::vec3 sun, float fog, glm::vec3 cam);
+    GltfModel mMach[6];        // MINER..TERMINAL, indexed by Tool
+    GltfModel mHub, mHubRival, mRobot, mRobotRival;
+    GltfModel mMine, mTurret, mFence, mTripwire;
+    GltfModel mItem[ITEM_N];   // ORE..ROBOT_ITEM
+
     // Hills: smooth elliptical bumps (some stretched into ridges) from the map seed.
     struct Hill { glm::vec2 c; float a, b, cs, sn, h; };
     std::vector<Hill> hills;

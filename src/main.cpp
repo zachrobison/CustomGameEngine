@@ -192,6 +192,8 @@ int main(int argc, char** argv) {
     icFab.load("assets/models/ironcommand/ic_fabricator.glb");
     icFabRings.load("assets/models/ironcommand/ic_fabricator_rings.glb");
     icHandL.load("assets/models/ironcommand/ic_hand_left.glb");
+    GltfModel icAvatar;   // other players' avatar in LAN matches
+    icAvatar.load("assets/models/ironcommand/ic_avatar.glb");
 
     GltfModel swordModel;       // melee visual (Knight's Sword, CC0/OGA)
     if (!swordModel.load("assets/models/sword.obj"))
@@ -1191,12 +1193,17 @@ int main(int argc, char** argv) {
                                   sunDir, worldSettings.fog_density,
                                   player.camera.position, tint);
             }
-            // Other players' avatars in a LAN match (bluish so rivals read clearly).
+            // Other players' avatars in a LAN match (atomic-age ic_avatar model).
             if (gameCfg.factory && factory.active) {
-                for (auto& pv : factory.peerAvatars())
-                    enemyModel.render(proj * view, pv.pos, pv.yaw, 1.f,
-                                      sunDir, worldSettings.fog_density,
-                                      player.camera.position, glm::vec3(0.55f, 0.8f, 1.7f));
+                for (auto& pv : factory.peerAvatars()) {
+                    if (icAvatar.loaded())
+                        icAvatar.render(proj * view, pv.pos, pv.yaw, 1.f,
+                                        sunDir, worldSettings.fog_density, player.camera.position);
+                    else
+                        enemyModel.render(proj * view, pv.pos, pv.yaw, 1.f,
+                                          sunDir, worldSettings.fog_density,
+                                          player.camera.position, glm::vec3(0.55f, 0.8f, 1.7f));
+                }
             }
         }
 
