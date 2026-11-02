@@ -1,0 +1,135 @@
+IRON COMMAND — COSTS, FACTORY STATS, AND FACTORY DESIGNS
+========================================================
+
+This document covers the numbers behind Iron Command's economy: what each item
+costs in raw ore, how fast each machine produces, how many machines to balance a
+production line, and some example factory layouts. All figures come from the
+game's recipes. Each section is self-contained.
+
+
+1. RESOURCE COST REFERENCE (RAW ORE PER ITEM)
+---------------------------------------------
+Every item traces back to raw ore. These are the cumulative costs — the total
+ore needed to make one of each item, counting every refining step.
+
+- 1 Ore = 1 ore (mined directly).
+- 1 Ingot = 1 ore (smelted from 1 ore).
+- 1 Screw = 0.5 ore (a Constructor makes 2 screws from 1 ingot, so each screw is
+  half an ingot).
+- 1 Plate = 1 ore (1 ingot makes 1 plate).
+- 1 Rod = 1 ore (1 ingot makes 1 rod).
+- 1 Part = 1.5 ore if made from a Rod + Screw, or 2 ore if made from a Plate + 2
+  Screws. The Rod recipe is the cheaper way to make Parts.
+- 1 Robot = 4 ore (2 Plates + 4 Screws = 2 ore + 2 ore). In ingot terms, a Robot
+  is 4 ingots: 2 ingots for the plates and 2 ingots for the four screws.
+- 1 Turret = 2 ore (1 Plate + 1 Rod).
+- 1 Mine = 2 ore (1 Plate + 2 Screws).
+- 1 Fence = 2 ore (2 Rods).
+- 1 Tripwire = 1.5 ore (1 Rod + 1 Screw).
+
+Cheapest defense per unit: the Tripwire (1.5 ore). The Robot (4 ore) is the most
+expensive single item in the game.
+
+
+2. PRODUCTION RATES (THROUGHPUT PER MACHINE)
+--------------------------------------------
+Each machine's output rate is its recipe output divided by its craft time. "/s"
+means per second; "/min" means per minute.
+
+- Miner (Mine Ore): 1 ore every 1.4 s = about 0.71 ore/s = ~43 ore/min.
+- Miner (Overclock): 2 ore every 1.4 s = about 1.43 ore/s = ~86 ore/min.
+- Miner (Turbo): 3 ore every 1.2 s = 2.5 ore/s = 150 ore/min.
+- Smelter: 1 ingot every 2.0 s = 0.5 ingot/s = 30 ingot/min.
+- Constructor (Screws): 2 screws every 1.5 s = ~1.33 screw/s = ~80 screw/min.
+- Constructor (Plate): 1 plate every 2.0 s = 0.5 plate/s = 30 plate/min.
+- Constructor (Rod): 1 rod every 1.2 s = ~0.83 rod/s = ~50 rod/min.
+- Assembler (Part from Plate): 1 part every 3.0 s = ~0.33 part/s = 20 part/min.
+- Assembler (Part from Rod): 1 part every 2.5 s = 0.4 part/s = 24 part/min.
+- Assembler (Robot): 1 robot every 4.0 s = 0.25 robot/s = 15 robot/min.
+- Assembler (Turret): 1 every 3.5 s. Assembler (Mine): 1 every 2.5 s.
+  Assembler (Fence): 1 every 2.0 s. Assembler (Tripwire): 1 every 2.0 s.
+
+One Assembler on the Robot recipe produces 15 robots per minute at full feed.
+
+
+3. BALANCING A LINE (MACHINE RATIOS)
+------------------------------------
+To run a machine at full speed you must feed it fast enough. These ratios keep
+each stage supplied with no starving and no overflow.
+
+Robot line (to keep one Assembler making Robots at full speed):
+- 1 Assembler on the Robot recipe needs 0.5 plate/s and 1 screw/s.
+- Plates: 1 Constructor on Plate makes exactly 0.5 plate/s. -> 1 Plate Constructor.
+- Screws: 1 Constructor on Screws makes ~1.33 screw/s, more than the 1 screw/s
+  needed. -> 1 Screw Constructor (with headroom).
+- Ingots: the two Constructors together consume about 1 ingot/s.
+- Smelters: each Smelter makes 0.5 ingot/s, so 1 ingot/s needs 2 Smelters.
+- Ore: 1 ingot/s needs 1 ore/s. One Overclock Miner (1.43 ore/s) covers it, or
+  two basic Miners.
+
+SUMMARY RATIO for a full Robot line:
+1 Assembler : 1 Plate Constructor : 1 Screw Constructor : 2 Smelters :
+1 Overclock Miner (or ~1.5 basic Miners). Output: 15 robots per minute.
+
+Rule of thumb: 1 Smelter feeds roughly 1 Constructor; 2 Smelters feed the pair of
+Constructors that feed 1 Robot Assembler.
+
+
+4. EXAMPLE FACTORY DESIGNS
+--------------------------
+
+DESIGN A — Starter Robot Line (minimum viable army)
+A compact build you can throw up early to start making robots:
+- 2 Miners on the nearest ore deposit (or 1 set to Overclock).
+- 2 Smelters fed by the miners.
+- 2 Constructors: one set to Plate, one set to Screws.
+- 1 Assembler on the Robot recipe.
+- 1 Barracks to stockpile finished robots.
+- Conveyor belts: Miners -> Smelters -> Constructors -> Assembler -> Barracks.
+Result: about 15 robots per minute. March them from the Hub Command Map.
+
+DESIGN B — Defense Line (turtle up)
+To wall off and defend your Hub instead of attacking:
+- Same ore -> ingot -> component base as Design A.
+- Point the Assembler at defense recipes instead of Robots: Fences (2 Rods),
+  Mines (1 Plate + 2 Screws), and Turrets (1 Plate + 1 Rod).
+- Add a Constructor on the Rod recipe, since Fences and Turrets need Rods.
+- Defenses accumulate in a stockpile; open the Hub Command Map and DRAW them:
+  drag fence walls across chokepoints, paint minefields on approaches, and place
+  turret clusters covering the gaps.
+
+DESIGN C — Mass-Robot Scale-Up (for aggression)
+To flood the map with robots, duplicate the Robot line:
+- Each full Robot line = 15 robots/min. Two lines = 30/min, three = 45/min.
+- Each added line needs its own 1 Assembler + 1 Plate Constructor + 1 Screw
+  Constructor + 2 Smelters + ~1 Overclock Miner.
+- Mining is usually the first bottleneck: switch Miners to Overclock or Turbo,
+  or claim more ore deposits with more Miners.
+
+
+5. EFFICIENCY TIPS
+------------------
+- Make Parts from Rods (1.5 ore) rather than Plates (2 ore) when you only need
+  Parts for upgrades — it is 25% cheaper in ore.
+- Overclock or Turbo your Miners before adding more Smelters; mining is the
+  usual first bottleneck.
+- Keep belts short and the chain clustered near your Hub so robots and defenses
+  deploy close to what they protect.
+- A Robot costs 4 ore and 4 ingots — the most expensive item — so protect your
+  Barracks stockpile and do not throw robots away carelessly.
+- Build defenses (fences, mines, turrets) in advance; they sit in the stockpile
+  until you draw them, so you can bank them during quiet moments.
+
+
+6. QUICK STATS SUMMARY (FOR RETRIEVAL)
+--------------------------------------
+- Robot cost: 4 ore (2 Plates + 4 Screws = 4 ingots). Most expensive item.
+- Cheapest defense: Tripwire at 1.5 ore. Turret/Mine/Fence are 2 ore each.
+- Cheapest Part: Rod + Screw = 1.5 ore.
+- One Robot Assembler = 15 robots/min at full feed.
+- Full Robot line ratio: 1 Assembler : 1 Plate Constructor : 1 Screw
+  Constructor : 2 Smelters : 1 Overclock Miner.
+- Miner output: 0.71 ore/s (Mine Ore), 1.43 ore/s (Overclock), 2.5 ore/s (Turbo).
+- Smelter: 0.5 ingot/s. Plate Constructor: 0.5 plate/s. Screw Constructor:
+  ~1.33 screw/s.
+</content>
